@@ -37,6 +37,7 @@ const.debug_mode_on = cmd_options.debug_mode_on
 #const.print_window_message = cmd_options.print_window_message
 
 # check files and folders
+if not os.path.isdir('./test_sequences'): os.mkdir('./test_sequences')
 if not os.path.isdir('./log'): os.mkdir('./log')
 if not os.path.isdir('./log/failure'): os.mkdir('./log/failure')
 if not os.path.isdir('./log/errordump'): os.mkdir('./log/errordump')
