@@ -203,14 +203,16 @@ class SequenceWorker(object):
                     elif result == Messages.ITEM_RESULT_FAIL:
                         loop_result = Messages.LOOP_RESULT_FAIL
                         loop_failure_messages.append(message)
-                # do recover if unknown error occurs
+                # reset loop environments, restart current loop from sequence begining
                 if loop_result == Messages.LOOP_RESULT_UNKNOWN:
                     if recover_retry == 0:
-                        raise RecoveryError('Recovery failed after %d time retry at loop %d' %(session_recover_retry,
-                                                                                              self.complt_loops+1))
                         self.stop()
                         time.sleep(5)
+                        err = RecoveryError('Recovery failed after %d time retry at loop %d' %(session_recover_retry,
+                                                                                               self.complt_loops+1))
+                        self.log_error(err)
                         return
+
                     if self.complt_loops+1 == last_recover_loop:
                         recover_retry = recover_retry - 1
                     else:
@@ -222,13 +224,17 @@ class SequenceWorker(object):
                                    'LOOP': self.complt_loops+1,
                                    'MSG_Q': loop_failure_messages}
                     self.send_ipc_msg(ipc_message)
+                    # reset loop scope variables
                     for worker in self.spawned_workers:
                         worker.kill()
                         time.sleep(0.1)
                     self.agent.close_pty()
+                    loop_result = Messages.LOOP_RESULT_PASS
+                    loop_failure_messages = []
+                    self.spawned_workers = []
                     current = 0
                 else:
-                    current = current + 1
+                    current += 1
 
             ipc_message = {'MSG': loop_result.value,
                            'NAME': self.sequence_file.split('.')[0],
