@@ -617,7 +617,7 @@ class PtyProcess(object):
 
         return s
 
-    def read_all_nonblocking(self, readafterdelay=0):
+    def read_all_nonblocking(self, readafterdelay=0, size=4*1024):
         """Nonblocking read all available data from the pseudoterminal, 
         return b'' if child's fd is not ready."""
         if readafterdelay and readafterdelay > 0:
@@ -627,11 +627,11 @@ class PtyProcess(object):
         try:
             if select.select([self.fd,], [], [], 0.0)[0]:
                 while select.select([self.fd,], [], [], 0.0)[0]:
-                    s = s + self.read(size=4*1024)
+                    s = s + self.read(size=size)
                     time.sleep(0.01)
                 # flush all for ensurance
                 if select.select([self.fd,], [], [], 0.0)[0]:
-                    s = s + self.read(size=4*1024*1024)
+                    s = s + self.read(size=size*1024)
         except EOFError:
             pass
 

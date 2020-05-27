@@ -1,11 +1,12 @@
 import sys
 import os
+import errno
 from os import linesep as newline
 import time
 import datetime
-import multiprocessing, logging
 from multiprocessing import Process
 import socket
+import re
 import json
 from enum import Enum
 
@@ -20,41 +21,61 @@ from const import (unix_domain_socket,
                    max_sequences,
                    window_refresh_interval,
                    sock_retry_timeout,
+                   session_recover_retry,
                    debug_mode_on)
 import utils
 from utils import (ExpectError,
                    TimeoutError,
-                   FileError)
+                   FileError,
+                   RecoveryError)
 from sequence import sequence_reader
 import cursor
 
 #mpl = multiprocessing.log_to_stderr()
 #mpl.setLevel(logging.INFO)
 
+#SEQUENCE WORKER
 class SequenceWorker(object):
     """Sequence agent worker class to run sequences, one worker corresponds
     to a specific sequence, parsed from given sequence file."""
-    def __init__(self, sequence_file, loops=1, logfile=None):
+    def __init__(self, sequence_file, loops=1):
         self.sequence_file = sequence_file
         self.test_sequence = sequence_reader(sequence_file)
-        self.logfile = logfile
+        self.logfile = open(utils.new_log_path(sequence=sequence_file.split(os.sep)[-1]), mode='w') if log_enabled else None
+        self.errordumpfile = None
         self.test_loops = loops
         self.complt_loops = 0
+        self.agent = UCSAgentWrapper(local_prompt=local_shell_prompt, logfile=self.logfile)
         self.errordump = None
-        self.agent = UCSAgentWrapper(local_prompt=local_shell_prompt, logfile=logfile)
+        self.spawned_workers= []
+    
+    def log_error(self, errorinfo):
+        if not self.errordumpfile:
+            error_header = '******ERROR DUMP MESSAGE******' + newline + newline
+            error_title = 'TEST SEQUENCE: %s' %(self.sequence_file) + newline + newline
+            self.errordumpfile = open(utils.new_log_path(sequence=self.sequence_file.split(os.sep)[-1], suffix='errordump'), mode='w')
+            self.errordumpfile.write(error_header + error_title)
+            self.errordumpfile.flush()
+
+        if self.errordumpfile and not self.errordumpfile.closed:
+            if isinstance(errorinfo, Exception): errorinfo = repr(errorinfo)
+            self.errordumpfile.write(errorinfo)
+            self.errordumpfile.flush()
     
     def run_item(self, cmd, **kw):
         result = Messages.ITEM_RESULT_PASS
         message = None
+        output = ''
         try:
-            self.agent.run_cmd(cmd=cmd, **kw)
+            output = self.agent.run_cmd(cmd=cmd, **kw)
         except (ExpectError, TimeoutError) as err:
-            trace_msg = err.args[0] + newline + newline
+            trace_msg = err.args[0] + newline
             command_msg = 'Command: %s' %(cmd if cmd else 'ENTER') + newline
             session_msg = 'Running session: %s' %(self.agent.current_session) + newline
             sequence_msg = 'Sequence: %s' %(self.sequence_file) + newline
             loop_msg = 'Running loop: %d' %(self.complt_loops+1) + newline
             err_msg = trace_msg + command_msg + session_msg + sequence_msg + loop_msg
+            # Handling Expect Errors
             if isinstance(err, ExpectError):
                 err_to_raise = ExpectError(err_msg, prompt=err.prompt, output=err.output)
                 if stop_on_failure:
@@ -64,70 +85,150 @@ class SequenceWorker(object):
                 else:
                     result = Messages.ITEM_RESULT_FAIL
                     message = err_msg
+            # Handling Timeout Errors, should be really dangerous.
             else:
-                err_to_raise = TimeoutError(err_msg, prompt=err.prompt, output=err.output)
-                self.errordump = err_to_raise
-                self.stop()
-                raise err_to_raise
+                if err.output and cmd.startswith(err.output):
+                    # In some very occasional cases, command was not completely sent, while script
+                    # doesn't know that, then this output will be a substring of the sending command,
+                    # like, command: run UPI DISPLAY-CONFIGURATION, output: run UPI DIS
+                    # A TimeoutError will be raised here, but the process is good to continue
+                    return self.run_item(cmd[len(err.output):], **kw)
+                else:
+                    err_to_raise = TimeoutError(err_msg, prompt=err.prompt, output=err.output)
+                    self.errordump = err_to_raise
+                    self.stop()
+                    raise err_to_raise
         except Exception as err:
             self.errordump = err
-            self.stop()
-            raise
+            self.log_error(repr(err))
+            result = Messages.ITEM_RESULT_UNKNOWN
 
-        return result, message
+        return result, message, output
     
     def run_all(self):
+        total = len(self.test_sequence)
+        last_recover_loop = 0
+        recover_retry = session_recover_retry
         self.complt_loops = 0
         while self.complt_loops < self.test_loops:
             loop_result = Messages.LOOP_RESULT_PASS
             loop_failure_messages = []
-            for command in self.test_sequence:
+            current = 0
+            self.spawned_workers = []
+            while current < total:
+                command = self.test_sequence[current]
                 if command.internal:
                     if command.action == 'INTR':
-                        self.agent.send_control('c')
+                        try:
+                            self.agent.send_control('c')
+                        except Exception as err:
+                            self.log_error(repr(err))
+                            loop_result = Messages.LOOP_RESULT_UNKNOWN
+                            loop_failure_messages = [repr(err)]
                         self.agent.flush()
+
                     elif command.action == 'QUIT':
-                        self.agent.quit()
+                        try:
+                            self.agent.quit()
+                        except Exception as err:
+                            self.log_error(repr(err))
+                            loop_result = Messages.LOOP_RESULT_UNKNOWN
+                            loop_failure_messages = [repr(err)]
                         self.agent.flush()
+
                     elif command.action == 'CLOSE':
                         self.agent.close_pty()
                         self.agent.flush()
+
                     elif command.action == 'PULSE':
-                        self.agent.pty_pulse_session()
+                        try:
+                            self.agent.pty_pulse_session()
+                        except Exception as err:
+                            self.log_error(repr(err))
+                            loop_result = Messages.LOOP_RESULT_UNKNOWN
+                            loop_failure_messages = [repr(err)]
+
                     elif command.action == 'WAIT':
                         seconds = utils.parse_time_to_sec(command.argv[1])
-                        time.sleep(seconds if seconds > 0 else 0)
+                        time.sleep(seconds)
+
                     elif command.action == 'SET_PROMPT':
-                        self.agent.set_pty_prompt(command.argv[1])
+                        try:
+                            self.agent.set_pty_prompt(command.argv[1])
+                        except Exception as err:
+                            self.log_error(repr(err))
+                            loop_result = Messages.LOOP_RESULT_UNKNOWN
+                            loop_failure_messages = [repr(err)]
+
                     elif command.action == 'ENTER':
                         self.run_item('', **command.cmd_dict)
+
                     elif command.action == 'FIND':
                         target_found = False
+                        outputs = []
                         for d in command.find_dir:
+                            if not re.search(r"^FS\d+:$", d.strip()) and 'cd' not in d: d = 'cd ' + d
                             self.run_item(d, **command.cmd_dict)
-                            if command.target_file in self.agent.run_cmd('ls', action='SEND'):
+                            result, message, output = self.run_item('ls', action='SEND')
+                            outputs.append(output)
+                            if utils.in_search(command.target_file, output):
                                 target_found = True
                                 break
                         if not target_found:
-                            self.agent.close_on_exception()
-                            raise FileError('File not found: %s' %(command.target_file))
+                            ferr = FileError('File not found: %s' %(command.target_file))
+                            self.log_error(repr(ferr) + newline + newline + repr(outputs))
+                            loop_result = Messages.LOOP_RESULT_UNKNOWN
+                            loop_failure_messages = [repr(ferr), repr(outputs)]
+                            if self.errordump: loop_failure_messages.append(repr(self.errordump))
+
                     elif command.action == 'NEW_WORKER':
                         new_worker = Process(target=run_sequence_worker, args=(command.sequence_file,
                                                                                command.loops,))
+                        #if command.wait: new_worker.daemon = True
                         new_worker.start()  # Start worker
-                        sequence_name = command.sequence_file.split('.')[0]
-                        ipc_message = {'MSG': Messages.SEQUENCE_START_RUNNING.value,
-                                       'NAME': sequence_name,
+                        ipc_message = {'MSG': Messages.SEQUENCE_RUNNING_START.value,
+                                       'NAME': command.sequence_file.split('.')[0],
                                        'LOOPS': command.loops}
                         self.send_ipc_msg(ipc_message)
                         #print('Spawned new worker [pid : %r] for sequence: %s' %(worker.pid, command.argv[1]))
                         # wait for derived sequence worker to complete if wait flag is set
                         if command.wait: new_worker.join()
+                        self.spawned_workers.append(new_worker)
+
                 else:
-                    result, message = self.run_item(command.command, **command.cmd_dict)
-                    if result == Messages.ITEM_RESULT_FAIL:
+                    result, message, output = self.run_item(command.command, **command.cmd_dict)
+                    if result == Messages.ITEM_RESULT_UNKNOWN:
+                        loop_result = Messages.LOOP_RESULT_UNKNOWN
+                        loop_failure_messages = [repr(self.errordump)]
+                    elif result == Messages.ITEM_RESULT_FAIL:
                         loop_result = Messages.LOOP_RESULT_FAIL
                         loop_failure_messages.append(message)
+                # do recover if unknown error occurs
+                if loop_result == Messages.LOOP_RESULT_UNKNOWN:
+                    if recover_retry == 0:
+                        raise RecoveryError('Recovery failed after %d time retry at loop %d' %(session_recover_retry,
+                                                                                              self.complt_loops+1))
+                        self.stop()
+                        time.sleep(5)
+                        return
+                    if self.complt_loops+1 == last_recover_loop:
+                        recover_retry = recover_retry - 1
+                    else:
+                        last_recover_loop = self.complt_loops + 1
+                        recover_retry = session_recover_retry
+
+                    ipc_message = {'MSG': loop_result.value,
+                                   'NAME': self.sequence_file.split('.')[0],
+                                   'LOOP': self.complt_loops+1,
+                                   'MSG_Q': loop_failure_messages}
+                    self.send_ipc_msg(ipc_message)
+                    for worker in self.spawned_workers:
+                        worker.kill()
+                        time.sleep(0.1)
+                    self.agent.close_pty()
+                    current = 0
+                else:
+                    current = current + 1
 
             ipc_message = {'MSG': loop_result.value,
                            'NAME': self.sequence_file.split('.')[0],
@@ -139,80 +240,72 @@ class SequenceWorker(object):
     
     def stop(self):
         # send COMPLETED message
-        ipc_message = {'MSG': Messages.SEQUENCE_COMPLETE_RUNNING.value,
+        ipc_message = {'MSG': Messages.SEQUENCE_RUNNING_COMPLETE.value,
                        'NAME': self.sequence_file.split('.')[0]}
         self.send_ipc_msg(ipc_message)
+        if self.errordump:
+            error_info = 'ERROR INFO:' + newline + repr(self.errordump) + newline
+            pty_info = 'AGENT INFO:' + newline + repr(self.agent) + newline
+            self.log_error(error_info + newline + pty_info + newline)
+
+        if self.agent:
+            self.agent.close_on_exception()
+            self.agent = None
+
         if self.logfile and not self.logfile.closed:
             self.logfile.flush()
             self.logfile.close()
             self.logfile = None
 
-        if self.errordump:
-            errordumpfile = open(utils.new_log_path(sequence=self.sequence_file.split(os.sep)[-1], suffix='errordump'), mode='w')
-            error_header = '******ERROR DUMP MESSAGE******' + newline + newline
-            error_body = 'TEST SEQUENCE: %s' %(self.sequence_file) + newline + newline
-            error_message = error_header + error_body + repr(self.errordump) + newline
-            pty_info = repr(self.agent)
-            errordumpfile.write(error_message + pty_info + newline)
-            errordumpfile.flush()
-            errordumpfile.close()
-
-        if self.agent:
-            self.agent.close_on_exception()
-            self.agent = None
+        if self.errordumpfile and not self.errordumpfile.closed:
+            self.errordumpfile.flush()
+            self.errordumpfile.close()
+            self.errordumpfile = None
     
     def send_ipc_msg(self, message):
         if debug_mode_on: return
 
-        if not isinstance(message, str):
-            try:
-                message = json.dumps(message, ensure_ascii=True)
-            except:
-                self.stop()
-                raise
+        if not isinstance(message, str): message = json.dumps(message, ensure_ascii=True)
+
         tosend = utils._bytes(message)
+        if not tosend: return
+
         t_end_ipc = time.time() + sock_retry_timeout
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         ipc_msg_sent = False
-        sock_connected = False
-        while time.time() <= t_end_ipc:
+        while time.time() <= t_end_ipc and not ipc_msg_sent:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
-                if not sock_connected:
-                    sock.connect(unix_domain_socket)
-                    sock_connected = True
-            except OSError as err:
-                if err.errno == 61: continue  # Connection Refused Error
-                else: break
-            try:
+                sock.setblocking(False)
+                sock.connect(unix_domain_socket)
                 sock.sendall(tosend)
                 ipc_msg_sent = True
             except OSError as err:
-                if err.errno in (9, 57): return self.send_ipc_msg(message)
-                else: continue
+                # socket connected failed or resource not available
+                if err.errno not in (errno.EAGAIN, errno.EWOULDBLOCK,
+                                     errno.ECONNREFUSED, errno.ECONNABORTED,
+                                     errno.EBADF, errno.ENOTCONN, errno.EPIPE):
+                    break
             finally:
                 sock.close()
-                break
 
         if not ipc_msg_sent: raise RuntimeError("Worker message can't be sent: %r" %(tosend))
 
 
 class Messages(Enum):
     """Signal definitions for sequence worker."""
-    SEQUENCE_START_RUNNING = 1      # new sequence worker started
-    SEQUENCE_COMPLETE_RUNNING = 2   # sequence worker completed
-    LOOP_RESULT_PASS = 3            # one loop pass all items
-    LOOP_RESULT_FAIL = 4            # one loop fail at some items
-    ITEM_RESULT_PASS = 5            # one item pass
-    ITEM_RESULT_FAIL = 6            # one item fail
-
+    SEQUENCE_RUNNING_START = 1      # new sequence worker started
+    SEQUENCE_RUNNING_COMPLETE = 2   # sequence worker completed
+    LOOP_RESULT_UNKNOWN = 3         # one loop failed because of unknown errors
+    LOOP_RESULT_PASS = 4            # one loop pass all items
+    LOOP_RESULT_FAIL = 5            # one loop fail at some items
+    ITEM_RESULT_UNKNOWN = 6         # one item fail because of unknown errors
+    ITEM_RESULT_PASS = 7            # one item pass
+    ITEM_RESULT_FAIL = 8            # one item fail
 
 
 # Sequence Worker entry, to start a worker based on a sequence file
 def run_sequence_worker(sequence_file, loops=1):
-    logfile = open(utils.new_log_path(sequence=sequence_file.split(os.sep)[-1]), mode='w') if log_enabled else None
-    job = SequenceWorker(sequence_file=sequence_file,
-                         logfile=logfile,
-                         loops=loops)
+    job = SequenceWorker(sequence_file=sequence_file, loops=loops)
     if job.logfile and not job.logfile.closed:
         line = '*************THIS IS %s SEQUENCE LOG***************' %('MASTER' if sequence_file == sequence_file_entry else 'SLAVE')
         job.logfile.write(line + newline + newline)
@@ -236,13 +329,12 @@ def run_sequence_worker(sequence_file, loops=1):
     job.stop()
 
 
-
+# MASTER WORKER
 class MasterWorker(object):
     """Master process class, for tracking statuses for all under-going test sequences."""
-    def __init__(self, failure_logfile):
-        self.failure_logfile = failure_logfile
-        log_header = '********FAILURE LOG********' + newline + newline
-        self.log(log_header)
+    def __init__(self, init_sequence_file):
+        self.init_sequence_file = init_sequence_file
+        self.failure_logfile = None
         self.worker_list = []
         self.ipc_sock = None
         self.init_ipc_sock()
@@ -262,62 +354,77 @@ class MasterWorker(object):
     
     def recv_ipc_msg(self):
         if debug_mode_on: return None
+        if not self.ipc_sock: self.init_ipc_sock()
 
-        torecv = b''
-        sock = None
+        recved = b''
+        message = None
         try:
-            sock, addr = self.ipc_sock.accept()
-            while True:
-                data = sock.recv(2048)
-                if not data:
-                    if torecv:
+            conn, addr = self.ipc_sock.accept()
+            try:
+                while True:
+                    try:
+                        s = conn.recv(4096)
+                    except OSError:
+                        s = b''
+                    if not s and recved:
                         try:
-                            return json.loads(utils._str(torecv))
+                            message = json.loads(utils._str(recved))
                         except ValueError:
-                            torecv = b''
-                            continue
-                    break
-                torecv = torecv + data
+                            message = utils._str(recved)
+                        break
+                    recved = recved + s
+            finally:
+                conn.close()
         except OSError as err:
-            if err.errno == 35:     # Resource temporarily unavailable
-                return None
-            if err.errno in (9, 57):    # Broken pipe, Socket is not connected
+            # resource temporarily unavailable
+            if err.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
                 self.init_ipc_sock()
-                return self.recv_ipc_msg()
-        finally:
-            if sock: sock.close()
 
-        return None
+        return message
     
-    def log(self, data):
+    def log_error(self, data):
+        if not self.failure_logfile:
+            log_header = '********FAILURE LOG********' + newline + newline
+            self.failure_logfile = open(utils.new_log_path(sequence=self.init_sequence_file.split(os.sep)[-1], suffix='failure'), mode='w')
+            self.failure_logfile.write(log_header)
+            self.failure_logfile.flush()
+
         if self.failure_logfile and not self.failure_logfile.closed:
             self.failure_logfile.write(data)
             self.failure_logfile.flush()
     
     def update_worker_status(self, msg):
+        if not isinstance(msg, dict) or 'NAME' not in msg or 'MSG' not in msg: return False
+
         arriver = msg['NAME']
         message = msg['MSG']
         status_updated = False
         for worker in self.worker_list:
             # sequence worker has been started
             if arriver == worker['NAME']:
-                if message == Messages.SEQUENCE_COMPLETE_RUNNING.value:
+                if message == Messages.SEQUENCE_RUNNING_COMPLETE.value:
                     worker['STATUS'] = 'COMPLETED'
+                elif message == Messages.LOOP_RESULT_UNKNOWN.value:
+                    error_log = newline + 'ERROR LOOP: %d' %(msg['LOOP']) + newline + 'ERROR MESSAGES:' + newline + newline
+                    for elog in msg['MSG_Q']:
+                        error_log = error_log + elog + newline
+                    self.log_error(error_log)
                 elif message == Messages.LOOP_RESULT_FAIL.value:
                     worker['FAILURE_LOOPS'] += 1
                     worker['FAILURE_MESSAGES'].update({msg['LOOP']: msg['MSG_Q']})
-                    failure_loop_log = 'FAILURE LOOP: %d' %(msg['LOOP']) + newline + 'FAILURE MESSAGES:' + newline + newline
+                    failure_loop_log = newline + 'FAILURE LOOP: %d' %(msg['LOOP']) + newline + 'FAILURE MESSAGES:' + newline + newline
                     for flog in msg['MSG_Q']:
                         failure_loop_log = failure_loop_log + flog + newline
-                    failure_loop_log = failure_loop_log + newline
-                    self.log(failure_loop_log)
+                    self.log_error(failure_loop_log)
                 else:
                     worker['SUCCESS_LOOPS'] += 1
+
                 status_updated = True
 
         if not status_updated:
-            if message != Messages.SEQUENCE_START_RUNNING.value:
+            if message != Messages.SEQUENCE_RUNNING_START.value:
                 raise RuntimeError('Invalid worker message received: %d' %(message))
+
             if len(self.worker_list) >= max_sequences:
                 raise RuntimeError('Too many sequences started, maximum: %d' %(max_sequences))
 
@@ -328,22 +435,23 @@ class MasterWorker(object):
                       'FAILURE_MESSAGES': {},
                       'STATUS': 'RUNNING'}
             self.worker_list.append(worker)
+
+        return True
     
     def some_worker_running(self):
         return any(w['STATUS'] == 'RUNNING' for w in self.worker_list)
 
 
-
 # ************PROGRAM MAIN ENTRY****************
 def start_master(entry_sequence_file, entry_running_loops=1):
-    master_failure_logfile = open(utils.new_log_path(sequence=entry_sequence_file.split(os.sep)[-1], suffix='failure'), mode='w')
-    master = MasterWorker(failure_logfile=master_failure_logfile)
+    master = MasterWorker(init_sequence_file=entry_sequence_file)
     # start first sequence worker
     worker = Process(target=run_sequence_worker, args=(entry_sequence_file,
                                                        entry_running_loops,))
+    #worker.daemon = True
     worker.start()
     worker_name = entry_sequence_file.split('.')[0]
-    message = {'MSG': Messages.SEQUENCE_START_RUNNING.value,
+    message = {'MSG': Messages.SEQUENCE_RUNNING_START.value,
                'NAME': worker_name,
                'LOOPS': entry_running_loops}
     master.update_worker_status(message)
@@ -351,8 +459,7 @@ def start_master(entry_sequence_file, entry_running_loops=1):
     master_running = True
     # window message display
     while master_running:
-        ipc_message = master.recv_ipc_msg()
-        if ipc_message: master.update_worker_status(ipc_message)
+        master.update_worker_status(master.recv_ipc_msg())
 
         window_header = newline + 'RUNNING WORKERS: %d >>>' %(len(master.worker_list)) + newline
         time_consume = str(datetime.timedelta(seconds=int(time.time()-t_start_prog)))
@@ -360,6 +467,10 @@ def start_master(entry_sequence_file, entry_running_loops=1):
         cursor_lines = 4
         # quit everything if all test workers finish
         if not master.some_worker_running():
+            # handle all messages in buffer
+            while master.update_worker_status(master.recv_ipc_msg()):
+                pass
+            if master.ipc_sock: master.ipc_sock.close()
             master_running = False
 
         # update window display
@@ -396,8 +507,10 @@ def start_master(entry_sequence_file, entry_running_loops=1):
         window_summary_display += newline
 
     sys.stdout.write(window_summary_display)
-    sys.stdout.write(newline + 'Failure log dumped into: %s' %(master_failure_logfile.name) + newline)
+    sys.stdout.write(newline)
+    sys.stdout.write('Failure log dumped to: %s' %(master.failure_logfile.name if master.failure_logfile else 'NONE'))
+    sys.stdout.write(newline)
     sys.stdout.flush()
-    if not master_failure_logfile.closed:
-        master_failure_logfile.flush()
-        master_failure_logfile.close()
+    if master.failure_logfile and not master.failure_logfile.closed:
+        master.failure_logfile.flush()
+        master.failure_logfile.close()

@@ -8,9 +8,6 @@ from subprocess import Popen, PIPE
 
 
 # Customized Exceptions
-class ContextError(Exception): pass
-'''Nested connections related errors, we called it Context.'''
-
 class SequenceError(Exception): pass
 '''Test sequence related errors'''
 
@@ -22,6 +19,24 @@ class PtyProcessError(Exception): pass
 
 class FileError(Exception): pass
 """File related errors, eg, logfile error."""
+
+class RecoveryError(Exception): pass
+"""Recover failed after retry."""
+
+class ContextError(Exception):
+    '''Nested connections related errors, we called it Context.'''
+    def __init__(self, *args, **kw):
+        super(ContextError, self).__init__(*args)
+        self.prompt = kw.get('prompt')
+        self.output = kw.get('output')
+
+    def __repr__(self):
+        rpr = 'ContextError: '
+        rpr = rpr + self.args[0] + newline
+        if self.prompt:
+            rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
+        if self.output:
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
 
 class ExpectError(Exception):
     '''Expect action related errors, eg, expected target not found.'''
@@ -58,17 +73,18 @@ class TimeoutError(Exception):
 PY3 = sys.version_info[0] >= 3
 if PY3:
     def _bytes(text, encoding="utf-8"):
-        return bytes(text, encoding=encoding) if isinstance(text, type('')) else text
-else:
-    def _bytes(text):
-        return bytes(text)
+        return bytes(text, encoding=encoding) if isinstance(text, str) else bytes(str(text), encoding=encoding)
 
-if PY3:
     def _str(text, encoding="utf-8", errors="ignore"):
         return text.decode(encoding, errors=errors) if isinstance(text, bytes) else str(text)
+
 else:
-    def _str(text):
+    def _str(text, encoding='utf-8'):
         return text.encode(encoding) if isinstance(text, unicode) else str(text)
+
+    def _bytes(text):
+        return text if isinstance(text, str) else bytes(text)
+
 
 # 7-bit C1 ANSI sequences
 ANSI_ESCAPES = re.compile(r'''
@@ -155,7 +171,7 @@ except ImportError:
 def get_last_line(out):
     out = _str(out)
     
-    lines = [line.strip() for line in out.split(newline) if line.strip()]
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
     last_line = lines[-1] if lines else ''
     
     return last_line
@@ -164,7 +180,7 @@ def get_last_line(out):
 def split_out_lines(out):
     out = _str(out)
     
-    lines = [line for line in out.split(newline) if line.strip()]
+    lines = [line for line in out.splitlines() if line.strip()]
     
     return lines if lines else None
 
@@ -218,7 +234,7 @@ def parse_time_to_sec(t):
     except ValueError:
         pass
 
-    return int(seconds)
+    return int(seconds) if seconds > 0 else 0
 
 
 def strip_ansi_escape(text):
@@ -227,6 +243,18 @@ def strip_ansi_escape(text):
         result = ANSI_ESCAPES.sub('', text)
 
     return result
+
+
+def prompt_strip_date(prompt_read):
+    regex = r"[A-Za-z]{3} [A-Za-z]{3} \d{2} \d{2}:\d{2}:\d{2} "
+    prompt_read = _str(prompt_read)
+    fixed_prompt = prompt_read
+
+    match = re.search(regex, prompt_read)
+    if match is not None:
+        fixed_prompt = fixed_prompt[match.end():]
+
+    return fixed_prompt
 
 
 def in_search(p, s, do_find=False):
@@ -243,6 +271,7 @@ def in_search(p, s, do_find=False):
 
 def local_run_cmd(cmd, timeout=None):
     with Popen(cmd.strip(), stdout=PIPE, stderr=PIPE, shell=True, close_fds=(os.name=='posix')) as process:
+        timeout = timeout if timeout and timeout > 0 else None
         try:
             stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as exc:
