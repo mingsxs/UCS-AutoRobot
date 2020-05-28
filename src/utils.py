@@ -168,7 +168,7 @@ except ImportError:
         return None
 
 
-def get_last_line(out):
+def get_prompt_line(out):
     out = _str(out)
     
     lines = [line.strip() for line in out.splitlines() if line.strip()]
@@ -255,6 +255,48 @@ def prompt_strip_date(prompt_read):
         fixed_prompt = fixed_prompt[match.end():]
 
     return fixed_prompt
+
+
+def ucs_fuzzy_match(p, s):
+    p = p.lstrip(' ')
+    s = s.lstrip(' ')
+    if p and '\n' not in p and s:
+        if s.startswith(p): return s[len(p):]
+        # serail console will flush a '\r' when one line console buffer is overflowed
+        if p.find('\r') > 0:
+            parts = p.split('\r')
+            left = parts[0]
+            right = parts[1]
+            rlen = len(right)
+            if s.startswith(left) and rlen >= 3:
+                rsub = s[len(left):]
+                rpos = rsub.find(right)
+                if rpos > -1: return rsub[rpos+rlen:]
+                cursor = 1
+                while cursor <= rlen - 2:
+                    rleft = right[:cursor]
+                    rright = right[cursor:]
+                    if rsub.startswith(rright) and left[::-1].startswith(rleft[::-1]):
+                        return rsub[len(rright):]
+                    cursor += 1
+    return ''
+
+
+def ucs_dupsubstr_verify(s):
+    s = s.strip(' ')
+    if s and len(s) >= 4:
+        pos = len(s)//2 - 2
+        mid = (len(s)-1)//2
+        left = s[:pos].strip(' ')
+        right = s[pos:].strip(' ')
+        while -3 <= (pos - mid) <= 3:
+            if left and right and left == right:
+                return True
+            pos += 1
+            left = s[:pos].strip(' ')
+            right = s[pos:].strip(' ')
+
+    return False
 
 
 def in_search(p, s, do_find=False):
