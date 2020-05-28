@@ -587,7 +587,7 @@ class UCSAgentWrapper(object):
                 self._send_line()
             out = self.read_expect(expect=expects, escape=escapes, timeout=timeout)
             if command not in error_skip_commands and any(in_search(e, out.lower()) for e in command_errors):
-                raise CommandError('Invalid command [%s] in host: %s' %(cmd, self.host))
+                raise CommandError('Invalid command in host: %s' %(self.host), output=out)
 
         return out
     
@@ -788,5 +788,5 @@ class UCSAgentWrapper(object):
         rpr = rpr + 'Cisco SOL Mode: %s' %(self.cisco_sol_mode) + newline
         rpr = rpr + 'Serial Port Mode: %s' %(self.serial_port_mode) + newline
         rpr = rpr + 'Timeout: %r' %(self.command_timeout) + newline
-        rpr = rpr + 'Pty Newline: %s' %('Return + Enter' if len(self.pty_linesep)==2 else 'Enter')
+        rpr = rpr + 'Pty Newline: %s' %('Return + Enter' if len(self.pty_linesep)==2 else 'Enter') + newline
         return rpr

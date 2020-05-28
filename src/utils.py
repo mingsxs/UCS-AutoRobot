@@ -11,9 +11,6 @@ from subprocess import Popen, PIPE
 class SequenceError(Exception): pass
 '''Test sequence related errors'''
 
-class CommandError(Exception): pass
-'''Command ralated errors, eg, command not found.'''
-
 class PtyProcessError(Exception): pass
 """Generic error class for this package."""
 
@@ -22,6 +19,21 @@ class FileError(Exception): pass
 
 class RecoveryError(Exception): pass
 """Recover failed after retry."""
+
+class CommandError(Exception):
+    '''Command ralated errors, eg, command not found.'''
+    def __init__(self, *args, **kw):
+        super(ContextError, self).__init__(*args)
+        self.prompt = kw.get('prompt')
+        self.output = kw.get('output')
+
+    def __repr__(self):
+        rpr = 'CommandError: '
+        rpr = rpr + self.args[0] + newline
+        if self.prompt:
+            rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
+        if self.output:
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
 
 class ContextError(Exception):
     '''Nested connections related errors, we called it Context.'''
