@@ -16,7 +16,7 @@ prompt_offset_range = 10                    # offset range to check if prompt st
 base_serial_port = 2003                     # base serial port for telnet connection
 
 # sequence related definitions
-seq_continue_newline = "\\"                 # sequence line syntax for continue in newline
+seq_continue_nextline = "\\"                # sequence line syntax for continue in newline
 seq_comment_header = '#'                    # sequence line syntax for commenting
 seq_item_delimiter = ';'                    # sequence line syntax for spliting items
 seq_subitem_delimiter = ','                 # sequence line syntax for spliting subitems
@@ -28,7 +28,7 @@ connect_host_timeout = 5.0                  # internal timeout const
 default_connect_timeout = 15.0              # internal timeout const
 local_command_timeout = 15.0                # timeout for command which is running in local shell
 remote_command_timeout = 30.0               # timeout for command which is running in pty connection
-intershell_command_timeout = 45.0           # timeout for command which is running inside intershell
+intershell_command_timeout = 60.0           # timeout for command which is running inside intershell
 host_ping_timeout = 6.0                     # internal timeout const
 
 delay_after_quit = 1.0                      # internal delay const

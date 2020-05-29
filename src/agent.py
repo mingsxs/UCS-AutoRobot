@@ -42,7 +42,8 @@ command_errors = ['command not found',
                   'no such file or directory',
                   'Is a directory',
                   'is not recognized as an internal or external command',
-                  'invalid input detected',]
+                  'invalid input detected',
+                  r"Module .* is not found",]
 error_skip_commands = ['rm', ]
 
 intershell_info = {
@@ -178,6 +179,7 @@ class UCSAgentWrapper(object):
         cmd_args = [x for x in cmd_argv[1:] if not (x.startswith('-') or '=' in x)]
         login_user = kwargs.get('user')
         login_password = kwargs.get('password')
+        do_boot_check = kwargs.get('boot_expect') or kwargs.get('boot_escape')
         target_host = cmd_args[0][cmd_args[0].find('@')+1: ]
         telnet_port = int(cmd_args[1]) if 'telnet' in fixed_cmd and len(cmd_args) > 1 else 0
         connect_session = '%s %s' %(cmd_word, target_host) + (' %d' %(telnet_port) if telnet_port else '')
@@ -266,6 +268,7 @@ class UCSAgentWrapper(object):
                             while time.time() <= t_end_watch:
                                 self._send_all('\r\n')
                                 boot_stream = self.read_until(PROMPT_WAIT_INPUT, bootup_watch_period, ignore_error=True)
+                                if do_boot_check: out = out + boot_stream
                                 if boot_stream and boot_stream.count('\n') in (1, 2) and self._s_verify_term(boot_stream):
                                     session_connected = True
                                     break
@@ -276,6 +279,12 @@ class UCSAgentWrapper(object):
         if session_connected:
             # Connected Successfully
             # Set pty newline for new session
+            if do_boot_check:
+                exp_raise = self._expect(out, kwargs.get('boot_expect'))
+                esc_raise = self._escape(out, kwargs.get('boot_escape'))
+                if exp_raise or esc_raise:
+                    raise ExpectError('Expect failure found while booting: %r' \
+                                      %(kwargs.get('boot_expect') if exp_raise else kwargs.get('boot_escape')))
             prompt_read = prompt_read_prev = None
             retry = session_prompt_retry
             while retry > 0:
@@ -467,33 +476,32 @@ class UCSAgentWrapper(object):
 
         if timeout > 0:
             t_start = time.time()
-            exp_rd_cmplt = False
+            read_completed = False
 
             while time.time() - t_start <= timeout:
                 chunk = self._str(self.pty.read_nonblocking(size_interval))
                 if do_expect and not chunk:
                     data_rd = utils.strip_ansi_escape(data_rd)
                     if in_search(self.prompt, data_rd[-(len(self.prompt)+prompt_offset_range):]):
-                        exp_rd_cmplt = True
+                        read_completed = True
                         break
                     # In some very occasional cases, command was not completely sent, while script
                     # doesn't know that, then this output will be a substring of the sending command,
                     # like, command: run UPI DISPLAY-CONFIGURATION, output: run UPI DIS
                     # A TimeoutError will be raised here, but the process is good to continue
-                    if time.time() - t_start > 5.0:
+                    if time.time() - t_start > 20.0:
                         for history in reversed(self.session_history):
                             fuzzy_match = utils.ucs_fuzzy_match(data_rd, history)
-                            if fuzzy_match: self._send_line(fuzzy_match)
+                            if fuzzy_match: self._send_all(fuzzy_match + self.pty_linesep)
 
                 data_rd = data_rd + chunk
                 time.sleep(time_interval)
 
             self.log(data_rd)
-            if do_expect and not exp_rd_cmplt:
+            if do_expect and not read_completed:
                 raise TimeoutError('Command exceeded time limit: %r sec' %(timeout),
                                    prompt=self.prompt,
                                    output=data_rd)
-
         return data_rd
     
     def read_until(self, until, timeout, ignore_error=False):
@@ -544,7 +552,6 @@ class UCSAgentWrapper(object):
             raise ExpectError('Expect failure found inside expects: %r' %(expects if exp_raise else escapes),
                               prompt=self.prompt,
                               output=out)
-
         return out
     
     def run_cmd(self, cmd, **kwargs):

@@ -5,7 +5,7 @@ import re
 from agent import (connect_command_patterns,
                    quit_command_patterns)
 from const import (seq_comment_header,
-                   seq_continue_newline,
+                   seq_continue_nextline,
                    seq_item_delimiter,
                    seq_subitem_delimiter,
                    sequence_file_entry)
@@ -58,6 +58,10 @@ class SequenceCommand(object):
             if hasattr(self, 'password') and self.password:
                 login_info = login_info + '%r' %(self.password)
             append = append + (login_info if login_info else 'None') + ')'
+            if hasattr(self, 'boot_expect') and self.boot_expect:
+                append = append + ', boot expect: %s' %(self.boot_expect)
+            if hasattr(self, 'boot_escape') and self.boot_escape:
+                append = append + ', boot escape: %s' %(self.boot_escape)
             rpr = '%s, %s' %(rpr, append)
             timeout = ', timeout: %r' %(self.timeout) if hasattr(self, 'timeout') and self.timeout else ''
             rpr = rpr + timeout
@@ -133,13 +137,12 @@ def sequence_line_parser(line):
                 elif seq_cmd_inst['action'] == 'FIND':
                     seq_cmd_inst['target_file'] = seq_cmd_args[1]
                     seq_cmd_inst['find_dir'] = [x.strip(seq_subitem_delimiter) for x in seq_cmd_args[2:]]
-            #print(repr(command))
+    # check line item count
+    if seq_item_count > 4:
+        raise SequenceError('Invalid syntax for %s command: %s' \
+                            %("INTERNAL" if seq_cmd_inst.internal else "SENDING", line))
     # parse connect commands
     if re.search(r"|".join(connect_command_patterns), cmd_keyword):
-        if seq_item_count > 3:
-            raise SequenceError('Invalid syntax for %s command: %s' \
-                                %("INTERNAL" if seq_cmd_inst.internal else "SENDING", line))
-
         seq_cmd_inst['action'] = 'CONNECT'
         if cmd_keyword == 'ssh' and '@' in seq_cmd_args[1]:
             seq_cmd_inst['user'] = seq_cmd_args[1][:seq_cmd_args[1].index('@')]
@@ -152,9 +155,13 @@ def sequence_line_parser(line):
                 pass
         seq_cmd_inst['timeout'] = seq_cmd_inst['timeout']
         login_info = g(seq_items, 1)
+        expect_info = g(seq_items, 2)
+        escape_info = g(seq_items, 3)
         login_items = [x.strip() for x in login_info.split(seq_subitem_delimiter) if x.strip()] if login_info else []
         info1 = g(login_items, 0)
         info2 = g(login_items, 1)
+        seq_cmd_inst['boot_expect'] = sequence_expect_parser(expect_info)
+        seq_cmd_inst['boot_escape'] = sequence_escape_parser(escape_info)
 
         if seq_cmd_inst['user']:
             seq_cmd_inst['password'] = info2 if info2 else info1
@@ -167,10 +174,6 @@ def sequence_line_parser(line):
             seq_cmd_inst['command'] = ' '.join(seq_cmd_inst['argv'])
     # parse normal commands or internal `SEND_ENTER` commands
     else:
-        if seq_item_count > 4:
-            raise SequenceError('Invalid syntax for %s command: %s' \
-                                %("INTERNAL" if seq_cmd_inst.internal else "SENDING", line))
-
         if seq_cmd_inst['action'] == 'SEND':
             seq_cmd_inst['bg_run'] = True if seq_cmd_inst['command'][-1] == '&' else False
         if not seq_cmd_inst['internal'] or seq_cmd_inst['action'] == 'ENTER':
@@ -201,7 +204,8 @@ def sequence_reader(sequence_file):
             # skip sequence comments
             line = line[0:line.find(seq_comment_header)] if seq_comment_header in line else line
             line = line.strip()
-            if line and line[-1] == seq_continue_newline:
+            if not line: continue
+            if line[-1] == seq_continue_nextline:
                 preserved_line = preserved_line + line[0:-1].strip()
             else:
                 if preserved_line:
@@ -209,5 +213,4 @@ def sequence_reader(sequence_file):
                     preserved_line = ''
                 inst = sequence_line_parser(line)
                 if inst: test_seq.append(inst)
-
     return test_seq

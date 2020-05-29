@@ -92,6 +92,7 @@ class SequenceWorker(object):
                 self.errordump = err_to_raise
                 self.stop()
                 raise err_to_raise
+            # Handling Unknown errors
             else:
                 self.errordump = err
                 self.log_error(repr(err) + newline + newline)
@@ -203,11 +204,11 @@ class SequenceWorker(object):
                 # reset loop environments, restart current loop from sequence begining
                 if loop_result == Messages.LOOP_RESULT_UNKNOWN:
                     if recover_retry == 0:
-                        self.stop()
-                        time.sleep(5)
                         err = RecoveryError('Recovery failed after %d time retry at loop %d' %(session_recover_retry,
                                                                                                self.complt_loops+1))
                         self.log_error(repr(err) + newline + newline)
+                        self.stop()
+                        time.sleep(5)
                         return
 
                     if self.complt_loops+1 == last_recover_loop:
@@ -246,6 +247,7 @@ class SequenceWorker(object):
         ipc_message = {'MSG': Messages.SEQUENCE_RUNNING_COMPLETE.value,
                        'NAME': self.sequence_file.split('.')[0]}
         self.send_ipc_msg(ipc_message)
+
         if self.errordump:
             error_info = 'ERROR INFO:' + newline + repr(self.errordump) + newline
             pty_info = 'AGENT INFO:' + newline + repr(self.agent) + newline

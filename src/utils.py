@@ -7,7 +7,23 @@ import subprocess
 from subprocess import Popen, PIPE
 
 
-# Customized Exceptions
+# Warnings that won't block test.
+#class SendWarning(Exception):
+#    '''Warning of command sending errors.'''
+#    def __init__(self, *args, **kw):
+#        super(SendWarning, self).__init__(*args)
+#        self.match = kw.get('fuzzy_match')
+#        self.send = kw.get('send_part')
+#
+#    def __repr__(self):
+#        rpr = 'Send Warning: '
+#        rpr = rpr + self.args[0] + newline
+#        if self.output:
+#            rpr = rpr + 'SEND PART:' + newline + self.send + newline + newline
+#        if self.match:
+#            rpr = rpr + 'FUZZY MATCH:' + newline + self.match + newline + newline
+#
+# Exceptions that will block or impact test.
 class SequenceError(Exception): pass
 '''Test sequence related errors'''
 
@@ -23,7 +39,7 @@ class RecoveryError(Exception): pass
 class CommandError(Exception):
     '''Command ralated errors, eg, command not found.'''
     def __init__(self, *args, **kw):
-        super(ContextError, self).__init__(*args)
+        super(CommandError, self).__init__(*args)
         self.prompt = kw.get('prompt')
         self.output = kw.get('output')
 
@@ -34,6 +50,7 @@ class CommandError(Exception):
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
             rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
+        return rpr
 
 class ContextError(Exception):
     '''Nested connections related errors, we called it Context.'''
@@ -49,6 +66,7 @@ class ContextError(Exception):
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
             rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
+        return rpr
 
 class ExpectError(Exception):
     '''Expect action related errors, eg, expected target not found.'''
