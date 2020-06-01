@@ -337,8 +337,8 @@ def in_search(p, s, do_find=False):
             if match is not None:
                 pos = match.start()
         return pos
-    else:
-        return (p in s) or (re.search(p, s, re.M | re.I) is not None)
+
+    return (p in s) or (re.search(p, s, re.M | re.I) is not None)
 
 
 def local_run_cmd(cmd, timeout=None):

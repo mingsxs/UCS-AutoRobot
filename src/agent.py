@@ -92,6 +92,7 @@ class UCSAgentWrapper(object):
         self.command_timeout = local_command_timeout
         self.session_info_chain = []
         self.session_history = []
+        self.rd_leftover = ''
     
 #    def running_locally(self):
 #        if not self.session_info_chain: return True
@@ -469,27 +470,36 @@ class UCSAgentWrapper(object):
     def atomic_read(self, timeout=None, do_expect=True):
         """Atomically read command output without waiting for certain timeout,
         this method will return instantly when commands execution complete."""
-        data_rd = ''
+        data_rd = self.rd_leftover
         time_interval = 0.03
         size_interval = 1024
         if timeout is None: timeout = self.command_timeout
 
         if timeout > 0:
+            self.rd_leftover = ''
             t_start = time.time()
+            check_send_timeout = timeout//4
             read_completed = False
-
             while time.time() - t_start <= timeout:
                 chunk = self._str(self.pty.read_nonblocking(size_interval))
                 if do_expect and not chunk:
+                    # strip all ANSI escape characters first
                     data_rd = utils.strip_ansi_escape(data_rd)
-                    if in_search(self.prompt, data_rd[-(len(self.prompt)+prompt_offset_range):]):
+                    # match shell prompt to check if command execution ends
+                    prompt_len = len(self.prompt)
+                    s = data_rd[-(prompt_len+prompt_offset_range):]
+                    spos = in_search(self.prompt, s, do_find=True)
+                    if spos >= 0:
+                        epos = spos + prompt_len - len(s)
+                        self.rd_leftover = data_rd[epos:]
+                        data_rd = data_rd[:epos]
                         read_completed = True
                         break
                     # In some very occasional cases, command was not completely sent, while script
                     # doesn't know that, then this output will be a substring of the sending command,
                     # like, command: run UPI DISPLAY-CONFIGURATION, output: run UPI DIS
                     # A TimeoutError will be raised here, but the process is good to continue
-                    if time.time() - t_start > 20.0:
+                    if (time.time() - t_start) > check_send_timeout:
                         for history in reversed(self.session_history):
                             fuzzy_match = utils.ucs_fuzzy_match(data_rd, history)
                             if fuzzy_match: self._send_all(fuzzy_match + self.pty_linesep)
@@ -777,12 +787,12 @@ class UCSAgentWrapper(object):
             self.reset_agent()
     
     def close_on_exception(self):
-        self.log(newline + repr(self) + newline)
+        self.log(newline + newline + repr(self) + newline)
         self.close_pty()
         self.flush(close_handler=True)
     
     def __repr__(self):
-        rpr = newline + 'Pty Session Info Dump:' + newline + newline
+        rpr = 'Pty Session Info Dump:' + newline + newline
         rpr = rpr + 'Pty: %r' %(self.pty) + newline
         rpr = rpr + 'Host: %r' %(self.host) + newline
         rpr = rpr + 'User: %r' %(self.user if hasattr(self, 'user') and self.user else 'unknown') + newline

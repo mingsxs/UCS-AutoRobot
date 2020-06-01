@@ -37,5 +37,5 @@ delay_after_intr = 0.2                      # internal delay const
 bootup_watch_period = 30.0                  # watch period to watch if target system is booting up
 bootup_watch_timeout = 600.0                # timeout for watching system booting up
 
-unix_domain_socket = './uds.sock'           # unix domain socket namespace address for IPC
+unix_domain_socket = './.uds.sock'           # unix domain socket namespace address for IPC
 sock_retry_timeout = 60.0                   # retry timeout for socket IPC

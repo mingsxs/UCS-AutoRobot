@@ -95,7 +95,7 @@ class SequenceWorker(object):
             # Handling Unknown errors
             else:
                 self.errordump = err
-                self.log_error(repr(err) + newline + newline)
+                self.log_error('ERROR INFO:' + newline + repr(err))
                 self.log_error(err_msg + newline)
                 agent_info = 'AGENT INFO:' + newline + repr(self.agent)
                 self.log_error(agent_info + newline)
