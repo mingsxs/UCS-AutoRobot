@@ -12,7 +12,7 @@ session_recover_retry = 3                   # session recover retry count
 session_prompt_retry = 4                    # session prompt set/get retry count
 max_sequences = 5                           # maximum worker processes
 window_refresh_interval = 5.0               # time period for refreshing window result printing
-prompt_offset_range = 10                    # offset range to check if prompt string is reached
+prompt_offset_range = 16                    # offset range to check if prompt string is reached
 base_serial_port = 2003                     # base serial port for telnet connection
 
 # sequence related definitions

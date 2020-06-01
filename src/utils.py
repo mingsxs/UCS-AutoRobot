@@ -341,6 +341,16 @@ def in_search(p, s, do_find=False):
     return (p in s) or (re.search(p, s, re.M | re.I) is not None)
 
 
+def reversed_find_term(startpos, p, s):
+    cursor = startpos + len(p)
+    s_len = len(s)
+    while cursor < s_len:
+        if s[cursor] in ' \r\n': cursor += 1
+        else: break
+
+    return (cursor - s_len)
+
+
 def local_run_cmd(cmd, timeout=None):
     with Popen(cmd.strip(), stdout=PIPE, stderr=PIPE, shell=True, close_fds=(os.name=='posix')) as process:
         timeout = timeout if timeout and timeout > 0 else None

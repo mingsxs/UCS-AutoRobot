@@ -428,7 +428,9 @@ class UCSAgentWrapper(object):
     
     def flush(self, delaybeforeflush=0.0, close_handler=False):
         if self.pty:
-            out = self._str(self.pty.read_all_nonblocking(readafterdelay=delaybeforeflush))
+            out = self.rd_leftover
+            self.rd_leftover = ''
+            out = out + self._str(self.pty.read_all_nonblocking(readafterdelay=delaybeforeflush))
             if out: out = utils.strip_ansi_escape(out)
             self.log(out)
 
@@ -470,12 +472,13 @@ class UCSAgentWrapper(object):
     def atomic_read(self, timeout=None, do_expect=True):
         """Atomically read command output without waiting for certain timeout,
         this method will return instantly when commands execution complete."""
-        data_rd = self.rd_leftover
+        data_rd = ''
         time_interval = 0.03
         size_interval = 1024
         if timeout is None: timeout = self.command_timeout
 
         if timeout > 0:
+            data_rd = self.rd_leftover
             self.rd_leftover = ''
             t_start = time.time()
             check_send_timeout = timeout//4
@@ -486,13 +489,13 @@ class UCSAgentWrapper(object):
                     # strip all ANSI escape characters first
                     data_rd = utils.strip_ansi_escape(data_rd)
                     # match shell prompt to check if command execution ends
-                    prompt_len = len(self.prompt)
-                    s = data_rd[-(prompt_len+prompt_offset_range):]
+                    s = data_rd[-(len(self.prompt)+prompt_offset_range):]
                     spos = in_search(self.prompt, s, do_find=True)
                     if spos >= 0:
-                        epos = spos + prompt_len - len(s)
-                        self.rd_leftover = data_rd[epos:]
-                        data_rd = data_rd[:epos]
+                        epos = utils.reversed_find_term(spos, self.prompt, s)
+                        if epos < 0:
+                            self.rd_leftover = data_rd[epos:]
+                            data_rd = data_rd[:epos]
                         read_completed = True
                         break
                     # In some very occasional cases, command was not completely sent, while script
@@ -522,7 +525,9 @@ class UCSAgentWrapper(object):
         t_interval = 0.03
         s_interval = 128
         untils = until if isinstance(until, type([])) else [until,]
-
+        if self.rd_leftover:
+            self.log(self.rd_leftover)
+            self.rd_leftover = ''
         if timeout > 0:
             t_end_rd = time.time() + timeout
             expected = False
@@ -725,6 +730,7 @@ class UCSAgentWrapper(object):
             del self.executable
             time.sleep(delay_after_quit)
             self.session_history = []
+            self.flush()
 
         else:
             if self.serial_port_mode:
