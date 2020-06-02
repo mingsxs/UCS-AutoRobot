@@ -1,4 +1,5 @@
 import sys
+#import traceback
 import os
 import errno
 from os import linesep as newline
@@ -58,7 +59,7 @@ class SequenceWorker(object):
             self.errordumpfile.flush()
 
         if self.errordumpfile and not self.errordumpfile.closed:
-            if isinstance(errorinfo, Exception): errorinfo = repr(errorinfo)
+            if not isinstance(errorinfo, str): errorinfo = repr(errorinfo)
             self.errordumpfile.write(errorinfo)
             self.errordumpfile.flush()
     
@@ -90,7 +91,9 @@ class SequenceWorker(object):
             # Handling Unknown errors
             else:
                 self.errordump = err
-                self.log_error('ERROR INFO:' + newline + repr(err))
+                self.log_error(newline + 'ERROR INFO:' + newline + repr(err))
+                #self.log_error(traceback.format_exc())
+                #self.log_error(sys.exc_info()[2])
                 self.log_error(err_msg + newline)
                 agent_info = 'AGENT INFO:' + newline + repr(self.agent)
                 self.log_error(agent_info + newline)
@@ -254,7 +257,7 @@ class SequenceWorker(object):
         self.send_ipc_msg(ipc_message)
 
         if self.errordump:
-            error_info = 'ERROR INFO:' + newline + repr(self.errordump) + newline
+            error_info = newline + 'ERROR INFO:' + newline + repr(self.errordump) + newline
             pty_info = 'AGENT INFO:' + newline + repr(self.agent) + newline
             self.log_error(error_info + newline + pty_info + newline)
 
@@ -415,7 +418,7 @@ class MasterWorker(object):
                 if message == Messages.SEQUENCE_RUNNING_COMPLETE.value:
                     worker['STATUS'] = 'COMPLETED'
                 elif message == Messages.LOOP_RESULT_UNKNOWN.value:
-                    error_log = newline + 'ERROR LOOP: %d' %(msg['LOOP']) + newline + 'ERROR MESSAGES:' + newline + newline
+                    error_log = newline + 'ERROR LOOP: %d' %(msg['LOOP']) + newline + 'ERROR MESSAGES:' + newline
                     for elog in msg['MSG_Q']:
                         error_log = error_log + elog + newline
                     self.log_error(error_log)

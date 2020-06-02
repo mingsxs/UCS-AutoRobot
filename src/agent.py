@@ -485,7 +485,7 @@ class UCSAgentWrapper(object):
             read_completed = False
             while time.time() - t_start <= timeout:
                 chunk = self._str(self.pty.read_nonblocking(size_interval))
-                if do_expect and not chunk:
+                if do_expect and not chunk and data_rd:
                     # strip all ANSI escape characters first
                     data_rd = utils.strip_ansi_escape(data_rd)
                     # match shell prompt to check if command execution ends

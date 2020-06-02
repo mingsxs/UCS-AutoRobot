@@ -330,15 +330,22 @@ def ucs_dupsubstr_verify(s):
 
 
 def in_search(p, s, do_find=False):
+    if not p: return -1 if do_find else False
+    # find, return match position
     if do_find:
         pos = s.find(p)
         if pos < 0:
-            match = re.search(p, s, re.M)
-            if match is not None:
-                pos = match.start()
+            try:
+                pos = re.search(p, s, re.M).start()
+            except:
+                pass
         return pos
-
-    return (p in s) or (re.search(p, s, re.M | re.I) is not None)
+    # search, return True/False existence
+    if p in s: return True
+    try:
+        return (re.search(p, s, re.M | re.I) is not None)
+    except:
+        return False
 
 
 def reversed_find_term(startpos, p, s):
