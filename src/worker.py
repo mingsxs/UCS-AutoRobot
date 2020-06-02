@@ -76,22 +76,17 @@ class SequenceWorker(object):
             sequence_msg = 'Sequence: %s' %(self.sequence_file) + newline
             loop_msg = 'Running loop: %d' %(self.complt_loops+1) + newline
             err_msg = trace_msg + command_msg + session_msg + sequence_msg + loop_msg
+            err_to_raise = None
             # Handling Expect Errors
             if isinstance(err, ExpectError):
-                err_to_raise = ExpectError(err_msg, prompt=err.prompt, output=err.output)
                 if stop_on_failure:
-                    self.errordump = err_to_raise
-                    self.stop()
-                    raise err_to_raise
+                    err_to_raise = ExpectError(err_msg, prompt=err.prompt, output=err.output)
                 else:
                     result = Messages.ITEM_RESULT_FAIL
                     message = err_msg
             # Handling Timeout Errors, should be really dangerous.
             elif isinstance(err, TimeoutError):
                 err_to_raise = TimeoutError(err_msg, prompt=err.prompt, output=err.output)
-                self.errordump = err_to_raise
-                self.stop()
-                raise err_to_raise
             # Handling Unknown errors
             else:
                 self.errordump = err
@@ -100,6 +95,16 @@ class SequenceWorker(object):
                 agent_info = 'AGENT INFO:' + newline + repr(self.agent)
                 self.log_error(agent_info + newline)
                 result = Messages.ITEM_RESULT_UNKNOWN
+            # Need to stop and raise process error
+            if err_to_raise:
+                ipc_message = {'MSG': LOOP_RESULT_FAIL.value,
+                               'NAME': self.sequence_file.split('.')[0],
+                               'LOOP': self.complt_loops+1,
+                               'MSG_Q': [err_msg,]}
+                self.send_ipc_msg(ipc_message)
+                self.errordump = err_to_raise
+                self.stop()
+                raise err_to_raise
 
         return result, message, output
     
