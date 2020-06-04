@@ -9,7 +9,8 @@ import utils
 from utils import (local_run_cmd,
                    in_search)
 from utils import (ContextError,
-                   CommandError,
+                   InvalidCommand,
+                   SendIncorrectCommand,
                    PtyProcessError,
                    ExpectError,
                    TimeoutError)
@@ -29,6 +30,7 @@ from const import (local_command_timeout,
                    prompt_offset_range,
                    base_serial_port,
                    session_connect_retry,
+                   session_recover_retry,
                    session_prompt_retry)
 
 
@@ -44,7 +46,7 @@ command_errors = ['command not found',
                   'is not recognized as an internal or external command',
                   'invalid input detected',
                   r"Module .* is not found",]
-error_skip_commands = ['rm', ]
+error_bypass_commands = ['rm', 'ls', '', ]
 
 intershell_info = {
     'bmc_diag': {'img_regex': r"udibmc_.*(\.stripped)?$",
@@ -90,9 +92,9 @@ class UCSAgentWrapper(object):
         self.cisco_sol_mode = False
         self.pty_linesep = '\n'
         self.command_timeout = local_command_timeout
-        self.session_info_chain = []
-        self.session_history = []
+        self.current_cmd = ''
         self.rd_leftover = ''
+        self.session_info_chain = []
     
 #    def running_locally(self):
 #        if not self.session_info_chain: return True
@@ -343,7 +345,6 @@ class UCSAgentWrapper(object):
                             "pty_linesep": self.pty_linesep,
                             "command_timeout": self.command_timeout}
             self.session_info_chain.append(session_info)
-            self.session_history = []
 
             return True
         # Connect Failed
@@ -360,10 +361,7 @@ class UCSAgentWrapper(object):
                     self.executable = exe
                     self.intershell = True
 
-        if not was_intershell and self.intershell:
-            self.session_history = []
-            return True
-        return False
+        return (not was_intershell and self.intershell)
     
     def _bytes(self, data):
         return utils._bytes(data)
@@ -415,7 +413,6 @@ class UCSAgentWrapper(object):
     def _send_line(self, line=''):
         "Send one line command with linesep fixed to pty process."
         line = line.strip()
-        if line: self.session_history.append(line)
         line = line + self.pty_linesep
         return self._send_all(line)
     
@@ -481,9 +478,10 @@ class UCSAgentWrapper(object):
             data_rd = self.rd_leftover
             self.rd_leftover = ''
             t_start = time.time()
-            check_send_timeout = timeout//4
+            check_send_timeout = timeout // 4
+            complement = None
             read_completed = False
-            while time.time() - t_start <= timeout:
+            while (time.time() - t_start) <= timeout:
                 chunk = self._str(self.pty.read_nonblocking(size_interval))
                 if do_expect and not chunk and data_rd:
                     # strip all ANSI escape characters first
@@ -502,10 +500,9 @@ class UCSAgentWrapper(object):
                     # doesn't know that, then this output will be a substring of the sending command,
                     # like, command: run UPI DISPLAY-CONFIGURATION, output: run UPI DIS
                     # A TimeoutError will be raised here, but the process is good to continue
-                    if (time.time() - t_start) > check_send_timeout:
-                        for history in reversed(self.session_history):
-                            fuzzy_match = utils.ucs_fuzzy_match(data_rd, history)
-                            if fuzzy_match: self._send_all(fuzzy_match + self.pty_linesep)
+                    if not complement and (time.time() - t_start) > check_send_timeout:
+                        complement = utils.ucs_fuzzy_complement(data_rd, self.current_cmd)
+                        if complement: self._send_all(complement + self.pty_linesep)
 
                 data_rd = data_rd + chunk
                 time.sleep(time_interval)
@@ -560,6 +557,7 @@ class UCSAgentWrapper(object):
         escapes = kwargs.get('escape')
 
         out = self.atomic_read(timeout)
+        self.check_cmd_output(out)
 
         exp_raise = self._expect(out, expects)
         esc_raise = self._escape(out, escapes)
@@ -572,7 +570,7 @@ class UCSAgentWrapper(object):
     def run_cmd(self, cmd, **kwargs):
         """Run command method, a wrapper including the process of _send_line and wait 
         and do expect read."""
-        command = utils.split_command_args(cmd)[0] if cmd.strip() else cmd
+        command = utils.get_command_word(cmd)
         # Do connecting first
         if re.search(r"|".join(connect_command_patterns), command): return self._connect(cmd, **kwargs)
         # Handle other commands
@@ -580,7 +578,7 @@ class UCSAgentWrapper(object):
         expects = kwargs.get('expect')
         escapes = kwargs.get('escape')
         out = ''
-        # Process Local Running Commands
+        # Process Local Commands
         if self.running_locally:
             self.log('%s %s' %(self.prompt, cmd) + newline)
             out, err = local_run_cmd(cmd, timeout=timeout)
@@ -593,25 +591,45 @@ class UCSAgentWrapper(object):
                 raise ExpectError('Expect failure found inside expects: %r' %(expects if exp_raise else escapes),
                                   prompt=self.prompt,
                                   output=out)
-        # Process Remote Running Commands
+        # Process Remote Commands
         else:
             self._send_line(cmd)
-            # Handling Commands which triggers session prompt reseting
+            # Handling commands which reset pty shell prompt
             prompt_set_filter = [command == 'cd',
                                  self._trigger_intershell(cmd),
-                                 kwargs.get('action') == 'FIND']
-            if any(prompt_set_filter): return self.set_pty_prompt(intershell=prompt_set_filter[1])
-
-            # Handling special cases which will cause prompt reset.
+                                 kwargs.get('action') == 'FIND', ]
+            if any(prompt_set_filter):
+                return self.set_pty_prompt(intershell=prompt_set_filter[1])
+            # Handling case of running background commands
             if kwargs.get('bg_run') is True:
                 time.sleep(timeout if timeout and timeout > 0 else 0)
                 timeout = 0  # reset timeout since we have done wait here
                 self._send_line()
-            out = self.read_expect(expect=expects, escape=escapes, timeout=timeout)
-            if command not in error_skip_commands and any(in_search(e, out.lower()) for e in command_errors):
-                raise CommandError('Invalid command in host: %s' %(self.host), output=out)
+            # Capturing and checking command output
+            self.current_cmd = cmd
+            try:
+                out = self.read_expect(expect=expects, escape=escapes, timeout=timeout)
+            except SendIncorrectCommand as err:
+                global session_recover_retry
+                if session_recover_retry == 0: raise err
+
+                session_recover_retry -= 1
+                return self.run_cmd(cmd, **kwargs)
+            except:
+                raise
 
         return out
+    
+    def check_cmd_output(self, out):
+        cmd = self.current_cmd.strip(' ')
+        if cmd and out:
+            # check if command is successfully sent
+            if not utils.ucs_output_search_command(cmd, out):
+                raise SendIncorrectCommand('Current command should be: %s' %(cmd), output=out)
+            # check command validity
+            command = utils.get_command_word(cmd)
+            if command not in error_bypass_commands and any(in_search(e, out.lower()) for e in command_errors):
+                raise InvalidCommand('Invalid command in host: %s' %(self.host), output=out)
     
     def find_session_by_host(self, host):
         walk = 0
@@ -729,7 +747,6 @@ class UCSAgentWrapper(object):
             self.intershell = False
             del self.executable
             time.sleep(delay_after_quit)
-            self.session_history = []
             self.flush()
 
         else:
@@ -774,7 +791,6 @@ class UCSAgentWrapper(object):
                     emsg = 'Enter unknown shell, host should be: %s, but read:' %(self.host) + newline + \
                         host_info + newline + 'prompt should be: %s, but read: ' %(self.prompt) + prompt_info
                     raise RuntimeError(emsg)
-                self.session_history = []
             else:
                 self.close_pty()
                 self.reset_agent()

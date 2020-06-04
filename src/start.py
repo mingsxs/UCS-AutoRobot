@@ -3,7 +3,7 @@ import argparse
 import const
 
 NAME = 'UCS AutoRobot'
-VERSION = '2.3.6'
+VERSION = '2.3.8'
 
 # feed command line arguments
 parser = argparse.ArgumentParser(prog=NAME,

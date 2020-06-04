@@ -36,15 +36,31 @@ class FileError(Exception): pass
 class RecoveryError(Exception): pass
 """Recover failed after retry."""
 
-class CommandError(Exception):
-    '''Command ralated errors, eg, command not found.'''
+class SendIncorrectCommand(Exception):
+    """Incorrect sending command."""
     def __init__(self, *args, **kw):
-        super(CommandError, self).__init__(*args)
+        super(SendIncorrectCommand, self).__init__(*args)
         self.prompt = kw.get('prompt')
         self.output = kw.get('output')
 
     def __repr__(self):
-        rpr = 'CommandError: '
+        rpr = 'Sending Command Not Found: '
+        rpr = rpr + self.args[0] + newline
+        if self.prompt:
+            rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
+        if self.output:
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
+        return rpr
+
+class InvalidCommand(Exception):
+    '''Invalid Command.'''
+    def __init__(self, *args, **kw):
+        super(InvalidCommand, self).__init__(*args)
+        self.prompt = kw.get('prompt')
+        self.output = kw.get('output')
+
+    def __repr__(self):
+        rpr = 'Invalid Command: '
         rpr = rpr + self.args[0] + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
@@ -60,7 +76,7 @@ class ContextError(Exception):
         self.output = kw.get('output')
 
     def __repr__(self):
-        rpr = 'ContextError: '
+        rpr = 'Context Error: '
         rpr = rpr + self.args[0] + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
@@ -76,7 +92,7 @@ class ExpectError(Exception):
         self.output = kw.get('output')
 
     def __repr__(self):
-        rpr = 'ExpectError: '
+        rpr = 'Expect Error: '
         rpr = rpr + self.args[0] + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
@@ -92,7 +108,7 @@ class TimeoutError(Exception):
         self.output = kw.get('output')
 
     def __repr__(self):
-        rpr = 'TimeoutError: '
+        rpr = 'Timeout Error: '
         rpr = rpr + self.args[0] + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
@@ -212,7 +228,16 @@ def split_out_lines(out):
     
     lines = [line for line in out.splitlines() if line.strip()]
     
-    return lines if lines else None
+    return lines
+
+
+def get_command_word(line):
+    line = _str(line)
+    line = line.lstrip(' ')
+    command = ''
+    if line:
+        command = line.split(' ')[0]
+    return command
 
 
 def split_command_args(command):
@@ -287,29 +312,47 @@ def prompt_strip_date(prompt_read):
     return fixed_prompt
 
 
-def ucs_fuzzy_match(p, s):
-    p = p.lstrip(' ')
+def ucs_fuzzy_complement(p, s):
+    p = p.lstrip()
     s = s.lstrip(' ')
-    if p and '\n' not in p and s:
+    if p and s and '\n' not in p:
         if s.startswith(p): return s[len(p):]
         # serail console will flush a '\r' when one line console buffer is overflowed
-        if p.find('\r') > 0:
-            parts = p.split('\r')
-            left = parts[0]
-            right = parts[1]
+        if p.count('\r') == 1:
+            left, right = p.split('\r')
             rlen = len(right)
-            if s.startswith(left) and rlen >= 3:
+            if s.startswith(left) and rlen >= 2:
                 rsub = s[len(left):]
                 rpos = rsub.find(right)
                 if rpos > -1: return rsub[rpos+rlen:]
                 cursor = 1
-                while cursor <= rlen - 2:
+                while cursor <= rlen - 1:
                     rleft = right[:cursor]
                     rright = right[cursor:]
                     if rsub.startswith(rright) and left[::-1].startswith(rleft[::-1]):
                         return rsub[len(rright):]
                     cursor += 1
     return ''
+
+
+def ucs_output_search_command(cmd, out):
+    cmd = cmd.strip()
+    out = out.lstrip()
+    cpos = opos = 0
+    len_cmd = len(cmd)
+    len_out = len(out)
+    while cpos < len_cmd and opos < len_out:
+        if cmd[cpos] == out[opos]:
+            cpos += 1
+            opos += 1
+        elif out[opos] == ' ':
+            while opos < len_out and out[opos] == ' ':
+                opos += 1
+        elif out[opos] == '\r':
+            opos += 1
+        else: break
+
+    return (cpos == len_cmd)
 
 
 def ucs_dupsubstr_verify(s):

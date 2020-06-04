@@ -100,7 +100,7 @@ class SequenceWorker(object):
                 result = Messages.ITEM_RESULT_UNKNOWN
             # Need to stop and raise process error
             if err_to_raise:
-                ipc_message = {'MSG': LOOP_RESULT_FAIL.value,
+                ipc_message = {'MSG': Messages.LOOP_RESULT_FAIL.value,
                                'NAME': self.sequence_file.split('.')[0],
                                'LOOP': self.complt_loops+1,
                                'MSG_Q': [err_msg,]}
