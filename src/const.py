@@ -10,6 +10,7 @@ local_shell_prompt = '>>>'                  # local shell prompt string
 session_connect_retry = 3                   # session connect retry count
 session_recover_retry = 3                   # session recover retry count
 session_prompt_retry = 4                    # session prompt set/get retry count
+session_prompt_retry_timeout = 5            # session prompt set/get retry timeout
 max_sequences = 5                           # maximum worker processes
 window_refresh_interval = 5.0               # time period for refreshing window result printing
 prompt_offset_range = 16                    # offset range to check if prompt string is reached

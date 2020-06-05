@@ -91,7 +91,7 @@ class SequenceWorker(object):
             # Handling Unknown errors
             else:
                 self.errordump = err
-                self.log_error(newline + 'ERROR INFO:' + newline + repr(err))
+                self.log_error(newline + 'ERROR INFO:' + newline + repr(err) + newline)
                 #self.log_error(traceback.format_exc())
                 #self.log_error(sys.exc_info()[2])
                 self.log_error(err_msg + newline)
@@ -214,7 +214,9 @@ class SequenceWorker(object):
                     if recover_retry == 0:
                         err = RecoveryError('Recovery failed after %d time retry at loop %d' %(session_recover_retry,
                                                                                                self.complt_loops+1))
-                        self.log_error(repr(err) + newline + newline)
+                        self.log_error(newline + '****************ERROR END****************' + newline)
+                        err_msg = newline + repr(err) + newline
+                        self.log_error(err_msg + newline)
                         self.stop()
                         time.sleep(5)
                         return

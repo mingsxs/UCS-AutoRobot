@@ -49,7 +49,7 @@ class SendIncorrectCommand(Exception):
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
-            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline
         return rpr
 
 class InvalidCommand(Exception):
@@ -65,7 +65,7 @@ class InvalidCommand(Exception):
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
-            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline
         return rpr
 
 class ContextError(Exception):
@@ -81,7 +81,7 @@ class ContextError(Exception):
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
-            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline
         return rpr
 
 class ExpectError(Exception):
@@ -113,7 +113,7 @@ class TimeoutError(Exception):
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
-            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline + newline
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline
         return rpr
 
 PY3 = sys.version_info[0] >= 3
@@ -345,12 +345,13 @@ def ucs_output_search_command(cmd, out):
         if cmd[cpos] == out[opos]:
             cpos += 1
             opos += 1
-        elif out[opos] == ' ':
-            while opos < len_out and out[opos] == ' ':
+        else:
+            if out[opos] == ' ':
+                opos = len_out - len(out[opos:].lstrip(' '))
+            if out[opos] == '\r':
                 opos += 1
-        elif out[opos] == '\r':
-            opos += 1
-        else: break
+            else:
+                break
 
     return (cpos == len_cmd)
 

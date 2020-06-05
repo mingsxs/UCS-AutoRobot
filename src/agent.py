@@ -31,7 +31,8 @@ from const import (local_command_timeout,
                    base_serial_port,
                    session_connect_retry,
                    session_recover_retry,
-                   session_prompt_retry)
+                   session_prompt_retry,
+                   session_prompt_retry_timeout)
 
 
 LOCAL_SHELL_PROMPT = '>>>'
@@ -281,7 +282,7 @@ class UCSAgentWrapper(object):
 
         if session_connected:
             # Connected Successfully
-            # Set pty newline for new session
+            # Set pty linesep for new session
             if do_boot_check:
                 exp_raise = self._expect(out, kwargs.get('boot_expect'))
                 esc_raise = self._escape(out, kwargs.get('boot_escape'))
@@ -293,24 +294,26 @@ class UCSAgentWrapper(object):
             while retry > 0:
                 self.flush()
                 self._send_all('\r\n')
-                s = self.read_until(PROMPT_WAIT_INPUT, 1, ignore_error=True)
+                s = self.read_until(PROMPT_WAIT_INPUT, session_prompt_retry_timeout, ignore_error=True)
                 if s and s.count('\n') in (1,2) and self._s_verify_term(s):
                     if s.count('\n') == 2: self.pty_linesep = '\n'
                     else: self.pty_linesep = '\r\n'
+                    self.flush()
                     self._send_line()
-                    prompt_line = self.read_until(PROMPT_WAIT_INPUT, 1, ignore_error=True)
-                    if prompt_line and prompt_line.count('\n') == 1: # do post verify
+                    prompt_line = self.read_until(PROMPT_WAIT_INPUT, session_prompt_retry_timeout, ignore_error=True)
+                    if prompt_line and prompt_line.count('\n') == 1: # do postly verify
                         prompt_read_prev = utils.get_prompt_line(prompt_line)
                         if 'telnet' in fixed_cmd: prompt_read_prev = utils.prompt_strip_date(prompt_read_prev)
                         break
                 retry -= 1
-            if retry == 0: raise ConnectionError('Prompt set linesep failed in new session: %s, line: %s' %(connect_session, s))
+            if retry == 0: raise ConnectionError('Pty set linesep failed in new session: %s, [%r,%r]'
+                                                 %(connect_session, s, prompt_read_prev))
             # Set pty prompt for new session
             retry = session_prompt_retry
             while retry > 0:
                 self.flush()
                 self._send_line()
-                s = self.read_until(PROMPT_WAIT_INPUT, 1, ignore_error=True)
+                s = self.read_until(PROMPT_WAIT_INPUT, session_prompt_retry_timeout, ignore_error=True)
                 prompt_info = utils.get_prompt_line(s)
                 # Strip dynamic datetime part of prompt for telnet session
                 if 'telnet' in fixed_cmd: prompt_info = utils.prompt_strip_date(prompt_info)
@@ -320,12 +323,13 @@ class UCSAgentWrapper(object):
                         continue
                     if not prompt_read:
                         prompt_read = prompt_info
-                        if prompt_read != prompt_read_prev: # do post verify
+                        if prompt_read != prompt_read_prev: # do postly verify
                             prompt_read_prev = prompt_read
                             prompt_read = None
                         else: break
                 retry -= 1
-            if retry == 0: raise ConnectionError('Prompt set failed in new session: %s, line: %s' %(connect_session, s))
+            if retry == 0: raise ConnectionError('Pty set prompt failed in new session: %s, [%r,%r]'
+                                                 %(connect_session, s, prompt_read))
             # Update agent
             self.host = target_host
             self.current_session = connect_session
@@ -520,8 +524,8 @@ class UCSAgentWrapper(object):
         limited in case of infinite loop."""
         data_rd = ''
         t_interval = 0.03
-        s_interval = 128
-        untils = until if isinstance(until, type([])) else [until,]
+        s_interval = 1024
+        untils = until if isinstance(until, type([])) else (until,)
         if self.rd_leftover:
             self.log(self.rd_leftover)
             self.rd_leftover = ''
@@ -536,7 +540,6 @@ class UCSAgentWrapper(object):
                         if in_search(un, data_rd):
                             expected = True
                             break
-
                 if expected: break
                 time.sleep(t_interval)
 
@@ -688,7 +691,7 @@ class UCSAgentWrapper(object):
         while retry > 0:
             self.flush()
             self._send_line()
-            s = self.read_until(nexts, 1, ignore_error=True)
+            s = self.read_until(nexts, session_prompt_retry_timeout, ignore_error=True)
             prompt_info = utils.get_prompt_line(s)
             # This is to skip time print, [Mon Apr 13 17:34:58 root@UCSC-C240-M6SX-WZP23350BLA:/]$
             if 'telnet' in self.current_session: prompt_info = utils.prompt_strip_date(prompt_info)
@@ -699,7 +702,7 @@ class UCSAgentWrapper(object):
                     continue
                 if not prompt2:
                     prompt2 = prompt_info
-                    if prompt1 != prompt2: # do post verify
+                    if prompt1 != prompt2: # do postly verify
                         prompt1 = prompt2
                         prompt2 = None
                     else:
