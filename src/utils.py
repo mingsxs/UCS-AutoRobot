@@ -119,13 +119,17 @@ class TimeoutError(Exception):
 PY3 = sys.version_info[0] >= 3
 if PY3:
     def _bytes(text, encoding="utf-8"):
-        return bytes(text, encoding=encoding) if isinstance(text, str) else bytes(str(text), encoding=encoding)
+        if isinstance(text, bytes): return text
+        if not isinstance(text, str): text = str(text)
+        return bytes(text, encoding=encoding)
 
     def _str(text, encoding="utf-8", errors="ignore"):
+        if isinstance(text, str): return text
         return text.decode(encoding, errors=errors) if isinstance(text, bytes) else str(text)
 
 else:
     def _str(text, encoding='utf-8'):
+        if isinstance(text, str): return text
         return text.encode(encoding) if isinstance(text, unicode) else str(text)
 
     def _bytes(text):
@@ -217,10 +221,12 @@ except ImportError:
 def get_prompt_line(out):
     out = _str(out)
     
-    lines = [line.strip() for line in out.splitlines() if line.strip()]
-    last_line = lines[-1] if lines else ''
+    out = out.rstrip()
+    promptline = ''
+    if out:
+        promptline = out.splitlines()[-1].lstrip()
     
-    return last_line
+    return promptline
 
 
 def split_out_lines(out):
@@ -259,6 +265,20 @@ def new_log_path(sequence='', suffix=''):
     else: logpath = '%s/%s_%s.log' %(base, now, sequence)
 
     return logpath
+
+
+def new_uds_name(sequence=''):
+    suffix = sequence.split(os.sep)[-1].split('.')[0]
+    if suffix:
+        uds_name = './.uds_' + suffix + '.sock'
+    else:
+        uds_name = './.uds.sock'
+
+    if os.path.exists(uds_name):
+        now = datetime.datetime.now().strftime('%b-%d-%H%M%S')
+        uds_name = './.uds_' + suffix + '_' + now + '.sock'
+
+    return uds_name
 
 
 def parse_time_to_sec(t):
@@ -338,23 +358,63 @@ def ucs_fuzzy_complement(p, s):
 def ucs_output_search_command(cmd, out):
     cmd = cmd.strip()
     out = out.lstrip()
-    cpos = opos = 0
-    len_cmd = len(cmd)
-    len_out = len(out)
-    while cpos < len_cmd and opos < len_out:
-        if cmd[cpos] == out[opos]:
-            cpos += 1
-            opos += 1
+    if not cmd or not out: return False
+    if out.startswith(cmd): return True
+
+    firstline = out.split('\r\n' if '\r\n' in out else '\n')[0]
+
+    cmdpos = linepos = 0
+    cmdlen = len(cmd)
+    linelen = len(firstline)
+    reversecheck = False
+    while 0 <= cmdpos < cmdlen and linepos < linelen:
+        if cmd[cmdpos] == firstline[linepos]:
+            cmdpos += 1
+            linepos += 1
         else:
-            if out[opos] == ' ':
-                opos = len_out - len(out[opos:].lstrip(' '))
-            if out[opos] == '\r':
-                opos += 1
+            if firstline[linepos] == '\r':
+                linepos += 1
+                reversecheck = True
+            elif firstline[linepos] == ' ' and firstline[linepos+1] == '\r':
+                linepos += 2
+                reversecheck = True
+            elif reversecheck:
+                cmdpos -= 1
             else:
                 break
 
-    return (cpos == len_cmd)
+    return (cmdpos == cmdlen)
 
+
+#def ucs_output_search_command(cmd, out):
+#    sep = '\r\n' if '\r\n' in out else '\n'
+#    cmd = cmd.strip()
+#    out = out.lstrip()
+#
+#    if out.startswith(cmd): return True
+#
+#    parts = out.split(sep)[0].split('\r')
+#    if not parts: return False
+#
+#    parts_pos = []
+#    for part in parts:
+#        part_pos = find_line_part(part, cmd)
+#        if part_pos is None:
+#            return False
+#        parts_pos.append(part_pos)
+#
+#
+#
+#def find_line_part(part, line):
+#    pos = line.find(part)
+#    while pos < 0 and part[-1] == ' ':
+#        part = part[:-1]
+#        pos = line.find(part)
+#
+#    if pos < 0: return None
+#
+#    return (pos, pos+len(part))
+#
 
 def ucs_dupsubstr_verify(s):
     s = s.strip(' ')
@@ -394,12 +454,12 @@ def in_search(p, s, do_find=False):
 
 def reversed_find_term(startpos, p, s):
     cursor = startpos + len(p)
-    s_len = len(s)
-    while cursor < s_len:
+    slen = len(s)
+    while cursor < slen:
         if s[cursor] in ' \r\n': cursor += 1
         else: break
 
-    return (cursor - s_len)
+    return (cursor - slen)
 
 
 def local_run_cmd(cmd, timeout=None):

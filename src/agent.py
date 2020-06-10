@@ -24,6 +24,7 @@ from const import (local_command_timeout,
                    local_shell_prompt,
                    delay_after_quit,
                    delay_after_intr,
+                   delay_before_prompt_flush,
                    host_ping_timeout,
                    bootup_watch_period,
                    bootup_watch_timeout,
@@ -163,7 +164,7 @@ class UCSAgentWrapper(object):
     def set_pty_prompt(self, prompt=None, intershell=False):
         if not prompt:
             self.prompt = self.get_pty_prompt(intershell=intershell)
-            if self.prompt == 'Unknown':
+            if self.prompt == 'unknown_prompt':
                 raise ContextError('Entered unknown %s, check your command!' %('intershell' if intershell else 'shell'))
         else:
             self.prompt = prompt
@@ -298,7 +299,7 @@ class UCSAgentWrapper(object):
                 if s and s.count('\n') in (1,2) and self._s_verify_term(s):
                     if s.count('\n') == 2: self.pty_linesep = '\n'
                     else: self.pty_linesep = '\r\n'
-                    self.flush()
+                    self.flush(delaybeforeflush=0.1)
                     self._send_line()
                     prompt_line = self.read_until(PROMPT_WAIT_INPUT, session_prompt_retry_timeout, ignore_error=True)
                     if prompt_line and prompt_line.count('\n') == 1: # do postly verify
@@ -311,7 +312,7 @@ class UCSAgentWrapper(object):
             # Set pty prompt for new session
             retry = session_prompt_retry
             while retry > 0:
-                self.flush()
+                self.flush(delaybeforeflush=delay_before_prompt_flush)
                 self._send_line()
                 s = self.read_until(PROMPT_WAIT_INPUT, session_prompt_retry_timeout, ignore_error=True)
                 prompt_info = utils.get_prompt_line(s)
@@ -323,10 +324,10 @@ class UCSAgentWrapper(object):
                         continue
                     if not prompt_read:
                         prompt_read = prompt_info
-                        if prompt_read != prompt_read_prev: # do postly verify
-                            prompt_read_prev = prompt_read
-                            prompt_read = None
-                        else: break
+                        if prompt_read == prompt_read_prev: break
+                        # do postly verify
+                        prompt_read_prev = prompt_read
+                        prompt_read = None
                 retry -= 1
             if retry == 0: raise ConnectionError('Pty set prompt failed in new session: %s, [%r,%r]'
                                                  %(connect_session, s, prompt_read))
@@ -482,10 +483,11 @@ class UCSAgentWrapper(object):
             data_rd = self.rd_leftover
             self.rd_leftover = ''
             t_start = time.time()
-            check_send_timeout = timeout // 4
+            t_end_read = t_start + timeout
+            t_check_send = t_start + (timeout//4)
             complement = None
             read_completed = False
-            while (time.time() - t_start) <= timeout:
+            while time.time() <= t_end_read:
                 chunk = self._str(self.pty.read_nonblocking(size_interval))
                 if do_expect and not chunk and data_rd:
                     # strip all ANSI escape characters first
@@ -504,10 +506,10 @@ class UCSAgentWrapper(object):
                     # doesn't know that, then this output will be a substring of the sending command,
                     # like, command: run UPI DISPLAY-CONFIGURATION, output: run UPI DIS
                     # A TimeoutError will be raised here, but the process is good to continue
-                    if not complement and (time.time() - t_start) > check_send_timeout:
+                    if not complement and time.time() > t_check_send:
                         complement = utils.ucs_fuzzy_complement(data_rd, self.current_cmd)
-                        if complement: self._send_all(complement + self.pty_linesep)
-
+                        if complement:
+                            self._send_all(complement + self.pty_linesep)
                 data_rd = data_rd + chunk
                 time.sleep(time_interval)
 
@@ -558,8 +560,9 @@ class UCSAgentWrapper(object):
 
         expects = kwargs.get('expect')
         escapes = kwargs.get('escape')
-
+        # read stream without wait
         out = self.atomic_read(timeout)
+        # check command output
         self.check_cmd_output(out)
 
         exp_raise = self._expect(out, expects)
@@ -611,7 +614,7 @@ class UCSAgentWrapper(object):
             # Capturing and checking command output
             self.current_cmd = cmd
             try:
-                out = self.read_expect(expect=expects, escape=escapes, timeout=timeout)
+                out = self.read_expect(timeout=timeout, expect=expects, escape=escapes)
             except SendIncorrectCommand as err:
                 global session_recover_retry
                 if session_recover_retry == 0: raise err
@@ -624,13 +627,12 @@ class UCSAgentWrapper(object):
         return out
     
     def check_cmd_output(self, out):
-        cmd = self.current_cmd.strip(' ')
-        if cmd and out:
+        if self.current_cmd and out:
             # check if command is successfully sent
-            if not utils.ucs_output_search_command(cmd, out):
-                raise SendIncorrectCommand('Current command should be: %s' %(cmd), output=out)
+            if not utils.ucs_output_search_command(self.current_cmd, out):
+                raise SendIncorrectCommand('Current command should be: %s' %(self.current_cmd), output=out)
             # check command validity
-            command = utils.get_command_word(cmd)
+            command = utils.get_command_word(self.current_cmd)
             if command not in error_bypass_commands and any(in_search(e, out.lower()) for e in command_errors):
                 raise InvalidCommand('Invalid command in host: %s' %(self.host), output=out)
     
@@ -689,7 +691,7 @@ class UCSAgentWrapper(object):
         nexts = [intershell_info[self.current_session]['terminator'],] if intershell else PROMPT_WAIT_INPUT
         retry = session_prompt_retry
         while retry > 0:
-            self.flush()
+            self.flush(delaybeforeflush=delay_before_prompt_flush)
             self._send_line()
             s = self.read_until(nexts, session_prompt_retry_timeout, ignore_error=True)
             prompt_info = utils.get_prompt_line(s)
@@ -702,14 +704,14 @@ class UCSAgentWrapper(object):
                     continue
                 if not prompt2:
                     prompt2 = prompt_info
-                    if prompt1 != prompt2: # do postly verify
-                        prompt1 = prompt2
-                        prompt2 = None
-                    else:
+                    if prompt1 == prompt2:
                         return prompt2
+                    # do postly verify
+                    prompt1 = prompt2
+                    prompt2 = None
             retry -= 1
 
-        return 'Unknown'
+        return 'unknown_prompt'
     
     def pty_ping_host(self, host):
         self.flush()

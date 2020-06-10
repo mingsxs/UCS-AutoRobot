@@ -25,18 +25,18 @@ seq_subitem_delimiter = ','                 # sequence line syntax for spliting 
 # timeout definitions
 ssh_timeout = 30.0                          # default ssh connect timeout
 telnet_timeout = 20.0                       # default telnet connect timeout
-connect_host_timeout = 5.0                  # internal timeout const
-default_connect_timeout = 15.0              # internal timeout const
-local_command_timeout = 15.0                # timeout for command which is running in local shell
-remote_command_timeout = 30.0               # timeout for command which is running in pty connection
-intershell_command_timeout = 60.0           # timeout for command which is running inside intershell
-host_ping_timeout = 6.0                     # internal timeout const
+connect_host_timeout = 10.0                 # internal timeout const
+default_connect_timeout = 20.0              # internal timeout const
+local_command_timeout = 60.0                # timeout for command which is running in local shell
+remote_command_timeout = 120.0              # timeout for command which is running in pty connection
+intershell_command_timeout = 300.0          # timeout for command which is running inside intershell
+host_ping_timeout = 8.0                     # internal timeout const
 
 delay_after_quit = 1.0                      # internal delay const
 delay_after_intr = 0.2                      # internal delay const
+delay_before_prompt_flush = 0.2             # internal delay const
 
 bootup_watch_period = 30.0                  # watch period to watch if target system is booting up
 bootup_watch_timeout = 600.0                # timeout for watching system booting up
 
-unix_domain_socket = './.uds.sock'           # unix domain socket namespace address for IPC
-sock_retry_timeout = 60.0                   # retry timeout for socket IPC
+sock_retry_timeout = 90.0                   # retry timeout for socket IPC

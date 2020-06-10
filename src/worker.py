@@ -13,8 +13,7 @@ from enum import Enum
 
 from agent import UCSAgentWrapper
 import const
-from const import (unix_domain_socket,
-                   loop_iterations,
+from const import (loop_iterations,
                    stop_on_failure,
                    log_enabled,
                    local_shell_prompt,
@@ -34,6 +33,8 @@ import cursor
 
 #mpl = multiprocessing.log_to_stderr()
 #mpl.setLevel(logging.INFO)
+
+UNIX_DOMAIN_SOCKET = None
 
 #SEQUENCE WORKER
 class SequenceWorker(object):
@@ -71,7 +72,7 @@ class SequenceWorker(object):
             output = self.agent.run_cmd(cmd=cmd, **kw)
         # This is the main entry for handling Worker/Agent Errors.
         except Exception as err:
-            trace_msg = err.args[0] + newline
+            trace_msg = (err.args[0] if err.args else 'Null Traceback Message') + newline
             command_msg = 'Command: %s' %(cmd if cmd else 'ENTER') + newline
             session_msg = 'Running session: %s' %(self.agent.current_session) + newline
             sequence_msg = 'Sequence: %s' %(self.sequence_file) + newline
@@ -91,7 +92,7 @@ class SequenceWorker(object):
             # Handling Unknown errors
             else:
                 self.errordump = err
-                self.log_error(newline + 'ERROR INFO:' + newline + repr(err) + newline)
+                self.log_error(newline + 'UNKNOWN ERROR INFO:' + newline + repr(err) + newline)
                 #self.log_error(traceback.format_exc())
                 #self.log_error(sys.exc_info()[2])
                 self.log_error(err_msg + newline)
@@ -114,7 +115,7 @@ class SequenceWorker(object):
     def run_all(self):
         total = len(self.test_sequence)
         last_recover_loop = 0
-        recover_retry = session_recover_retry
+        test_recover_retry = session_recover_retry
         self.complt_loops = 0
         while self.complt_loops < self.test_loops:
             loop_result = Messages.LOOP_RESULT_PASS
@@ -173,7 +174,8 @@ class SequenceWorker(object):
                         target_found = False
                         outputs = []
                         for d in command.find_dir:
-                            if not re.search(r"^FS\d+:$", d.strip()) and 'cd' not in d: d = 'cd ' + d
+                            if not re.search(r"^FS\d+:$", d.strip()) and 'cd' not in d:
+                                d = 'cd ' + d
                             self.run_item(d, **command.cmd_dict)
                             result, message, output = self.run_item('ls', action='SEND')
                             outputs.append(output)
@@ -211,7 +213,7 @@ class SequenceWorker(object):
                         loop_failure_messages.append(message)
                 # reset loop environments, restart current loop from sequence begining
                 if loop_result == Messages.LOOP_RESULT_UNKNOWN:
-                    if recover_retry == 0:
+                    if test_recover_retry == 0:
                         err = RecoveryError('Recovery failed after %d time retry at loop %d' %(session_recover_retry,
                                                                                                self.complt_loops+1))
                         self.log_error(newline + '****************ERROR END****************' + newline)
@@ -220,12 +222,11 @@ class SequenceWorker(object):
                         self.stop()
                         time.sleep(5)
                         return
-
-                    if self.complt_loops+1 == last_recover_loop:
-                        recover_retry = recover_retry - 1
+                    if (self.complt_loops + 1) == last_recover_loop:
+                        test_recover_retry -= 1
                     else:
                         last_recover_loop = self.complt_loops + 1
-                        recover_retry = session_recover_retry
+                        test_recover_retry = session_recover_retry
 
                     ipc_message = {'MSG': loop_result.value,
                                    'NAME': self.sequence_file.split('.')[0],
@@ -259,7 +260,7 @@ class SequenceWorker(object):
         self.send_ipc_msg(ipc_message)
 
         if self.errordump:
-            error_info = newline + 'ERROR INFO:' + newline + repr(self.errordump) + newline
+            error_info = newline + 'DUMP ERROR INFO:' + newline + repr(self.errordump) + newline
             pty_info = 'AGENT INFO:' + newline + repr(self.agent) + newline
             self.log_error(error_info + newline + pty_info + newline)
 
@@ -291,7 +292,7 @@ class SequenceWorker(object):
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 sock.setblocking(False)
-                sock.connect(unix_domain_socket)
+                sock.connect(UNIX_DOMAIN_SOCKET)
                 sock.sendall(tosend)
                 ipc_msg_sent = True
             except OSError as err:
@@ -360,10 +361,10 @@ class MasterWorker(object):
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.setblocking(False)     # set nonblocking recv requests
         try:
-            os.remove(unix_domain_socket)
+            os.remove(UNIX_DOMAIN_SOCKET)
         except OSError:
             pass
-        sock.bind(unix_domain_socket)
+        sock.bind(UNIX_DOMAIN_SOCKET)
         sock.listen(max_sequences)
         self.ipc_sock = sock
     
@@ -459,6 +460,8 @@ class MasterWorker(object):
 
 # ************PROGRAM MAIN ENTRY****************
 def start_master(entry_sequence_file, entry_running_loops=1):
+    global UNIX_DOMAIN_SOCKET
+    UNIX_DOMAIN_SOCKET = utils.new_uds_name(entry_sequence_file)
     master = MasterWorker(init_sequence_file=entry_sequence_file)
     # start first sequence worker
     worker = Process(target=run_sequence_worker, args=(entry_sequence_file,

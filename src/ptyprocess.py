@@ -625,13 +625,12 @@ class PtyProcess(object):
     
         s = b''
         try:
+            while select.select([self.fd,], [], [], 0.0)[0]:
+                s = s + self.read(size=size)
+                time.sleep(0.02)
+            # flush all for ensurance
             if select.select([self.fd,], [], [], 0.0)[0]:
-                while select.select([self.fd,], [], [], 0.0)[0]:
-                    s = s + self.read(size=size)
-                    time.sleep(0.01)
-                # flush all for ensurance
-                if select.select([self.fd,], [], [], 0.0)[0]:
-                    s = s + self.read(size=size*1024)
+                s = s + self.read(size=size*1024)
         except EOFError:
             pass
 
