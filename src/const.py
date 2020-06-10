@@ -31,9 +31,9 @@ local_command_timeout = 60.0                # timeout for command which is runni
 remote_command_timeout = 120.0              # timeout for command which is running in pty connection
 intershell_command_timeout = 300.0          # timeout for command which is running inside intershell
 host_ping_timeout = 8.0                     # internal timeout const
+send_intr_timeout = 0.6                     # internal timeout const
 
-delay_after_quit = 1.0                      # internal delay const
-delay_after_intr = 0.2                      # internal delay const
+delay_after_quit = 0.8                      # internal delay const
 delay_before_prompt_flush = 0.2             # internal delay const
 
 bootup_watch_period = 30.0                  # watch period to watch if target system is booting up

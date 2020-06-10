@@ -64,6 +64,17 @@ class SequenceWorker(object):
             self.errordumpfile.write(errorinfo)
             self.errordumpfile.flush()
     
+    def format_error_message(self, cmd, error):
+        trace_msg = (error.args[0] if error.args else 'Null Traceback Message') + newline
+        if not isinstance(error, (ExpectError, TimeoutError)):
+            trace_msg = '%s: ' %(error.__class__.__name__) + trace_msg
+        command_msg = 'Command: %s' %(cmd if cmd else 'ENTER') + newline
+        session_msg = 'Running session: %s' %(self.agent.current_session) + newline
+        sequence_msg = 'Sequence: %s' %(self.sequence_file) + newline
+        loop_msg = 'Running loop: %d' %(self.complt_loops+1) + newline
+        emsg = trace_msg + command_msg + session_msg + sequence_msg + loop_msg
+        return emsg
+
     def run_item(self, cmd, **kw):
         result = Messages.ITEM_RESULT_PASS
         message = None
@@ -72,12 +83,7 @@ class SequenceWorker(object):
             output = self.agent.run_cmd(cmd=cmd, **kw)
         # This is the main entry for handling Worker/Agent Errors.
         except Exception as err:
-            trace_msg = (err.args[0] if err.args else 'Null Traceback Message') + newline
-            command_msg = 'Command: %s' %(cmd if cmd else 'ENTER') + newline
-            session_msg = 'Running session: %s' %(self.agent.current_session) + newline
-            sequence_msg = 'Sequence: %s' %(self.sequence_file) + newline
-            loop_msg = 'Running loop: %d' %(self.complt_loops+1) + newline
-            err_msg = trace_msg + command_msg + session_msg + sequence_msg + loop_msg
+            err_msg = self.format_error_message(cmd, err)
             err_to_raise = None
             # Handling Expect Errors
             if isinstance(err, ExpectError):
@@ -92,7 +98,7 @@ class SequenceWorker(object):
             # Handling Unknown errors
             else:
                 self.errordump = err
-                self.log_error(newline + 'UNKNOWN ERROR INFO:' + newline + repr(err) + newline)
+                self.log_error(newline + 'UNKNOWN ERROR INFO:' + newline)
                 #self.log_error(traceback.format_exc())
                 #self.log_error(sys.exc_info()[2])
                 self.log_error(err_msg + newline)
@@ -129,7 +135,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.send_control('c')
                         except Exception as err:
-                            self.log_error(repr(err) + newline + newline)
+                            self.log_error(self.format_error_message('INTR', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
                         self.agent.flush()
@@ -138,7 +144,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.quit()
                         except Exception as err:
-                            self.log_error(repr(err) + newline + newline)
+                            self.log_error(self.format_error_message('QUIT', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
                         self.agent.flush()
@@ -151,7 +157,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.pty_pulse_session()
                         except Exception as err:
-                            self.log_error(repr(err) + newline + newline)
+                            self.log_error(self.format_error_message('PULSE', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
 
@@ -163,7 +169,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.set_pty_prompt(command.argv[1])
                         except Exception as err:
-                            self.log_error(repr(err) + newline + newline)
+                            self.log_error(self.format_error_message('SET PROMPT', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
 
@@ -183,10 +189,10 @@ class SequenceWorker(object):
                                 target_found = True
                                 break
                         if not target_found:
-                            ferr = FileError('File not found: %s' %(command.target_file))
-                            self.log_error(repr(ferr) + newline + newline + repr(outputs) + newline + newline)
+                            ferr = FileError('File not found: %s' %(command.target_file), outputs=outputs)
+                            self.log_error(repr(ferr) + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
-                            loop_failure_messages = [repr(ferr), repr(outputs)]
+                            loop_failure_messages = [repr(ferr), ]
                             if self.errordump: loop_failure_messages.append(repr(self.errordump))
 
                     elif command.action == 'NEW_WORKER':
@@ -213,9 +219,9 @@ class SequenceWorker(object):
                         loop_failure_messages.append(message)
                 # reset loop environments, restart current loop from sequence begining
                 if loop_result == Messages.LOOP_RESULT_UNKNOWN:
+                    # DO LOOP RECOVERY
                     if test_recover_retry == 0:
-                        err = RecoveryError('Recovery failed after %d time retry at loop %d' %(session_recover_retry,
-                                                                                               self.complt_loops+1))
+                        err = RecoveryError('Recovery failed after %d retry at loop %d' %(session_recover_retry, self.complt_loops+1))
                         self.log_error(newline + '****************ERROR END****************' + newline)
                         err_msg = newline + repr(err) + newline
                         self.log_error(err_msg + newline)
@@ -398,7 +404,7 @@ class MasterWorker(object):
 
         return message
     
-    def log_error(self, data):
+    def log_failure(self, data):
         if not self.failure_logfile:
             log_header = '********FAILURE LOG********' + newline + newline
             self.failure_logfile = open(utils.new_log_path(sequence=self.init_sequence_file.split(os.sep)[-1], suffix='failure'), mode='w')
@@ -424,14 +430,14 @@ class MasterWorker(object):
                     error_log = newline + 'ERROR LOOP: %d' %(msg['LOOP']) + newline + 'ERROR MESSAGES:' + newline
                     for elog in msg['MSG_Q']:
                         error_log = error_log + elog + newline
-                    self.log_error(error_log)
+                    self.log_failure(error_log)
                 elif message == Messages.LOOP_RESULT_FAIL.value:
                     worker['FAILURE_LOOPS'] += 1
                     worker['FAILURE_MESSAGES'].update({msg['LOOP']: msg['MSG_Q']})
                     failure_loop_log = newline + 'FAILURE LOOP: %d' %(msg['LOOP']) + newline + 'FAILURE MESSAGES:' + newline + newline
                     for flog in msg['MSG_Q']:
                         failure_loop_log = failure_loop_log + flog + newline
-                    self.log_error(failure_loop_log)
+                    self.log_failure(failure_loop_log)
                 else:
                     worker['SUCCESS_LOOPS'] += 1
 

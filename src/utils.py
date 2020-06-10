@@ -30,8 +30,23 @@ class SequenceError(Exception): pass
 class PtyProcessError(Exception): pass
 """Generic error class for this package."""
 
-class FileError(Exception): pass
-"""File related errors, eg, logfile error."""
+class FileError(Exception):
+    """File related errors, eg, logfile error."""
+    def __init__(self, *args, **kw):
+        super(FileError, self).__init__(*args)
+        self.outputs = kw.get('outputs')
+
+    def __repr__(self):
+        rpr = 'Target File Not Found: '
+        rpr = rpr + (self.args[0] if self.args else 'NULL') + newline
+        if self.outputs:
+            rpr = rpr + 'READ OUTPUTS:' + newline
+            if isinstance(self.outputs, type([])):
+                for output in self.outputs:
+                    rpr = rpr + output + newline
+            else:
+                rpr = rpr + repr(self.outputs) + newline
+        return rpr
 
 class RecoveryError(Exception): pass
 """Recover failed after retry."""
@@ -45,7 +60,7 @@ class SendIncorrectCommand(Exception):
 
     def __repr__(self):
         rpr = 'Sending Command Not Found: '
-        rpr = rpr + self.args[0] + newline
+        rpr = rpr + (self.args[0] if self.args else 'NULL') + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
@@ -61,7 +76,7 @@ class InvalidCommand(Exception):
 
     def __repr__(self):
         rpr = 'Invalid Command: '
-        rpr = rpr + self.args[0] + newline
+        rpr = rpr + (self.args[0] if self.args else 'NULL') + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
@@ -77,7 +92,7 @@ class ContextError(Exception):
 
     def __repr__(self):
         rpr = 'Context Error: '
-        rpr = rpr + self.args[0] + newline
+        rpr = rpr + (self.args[0] if self.args else 'NULL') + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
@@ -93,7 +108,7 @@ class ExpectError(Exception):
 
     def __repr__(self):
         rpr = 'Expect Error: '
-        rpr = rpr + self.args[0] + newline
+        rpr = rpr + (self.args[0] if self.args else 'NULL') + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:
@@ -109,7 +124,7 @@ class TimeoutError(Exception):
 
     def __repr__(self):
         rpr = 'Timeout Error: '
-        rpr = rpr + self.args[0] + newline
+        rpr = rpr + (self.args[0] if self.args else 'NULL') + newline
         if self.prompt:
             rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
         if self.output:

@@ -23,7 +23,7 @@ from const import (local_command_timeout,
                    default_connect_timeout,
                    local_shell_prompt,
                    delay_after_quit,
-                   delay_after_intr,
+                   send_intr_timeout,
                    delay_before_prompt_flush,
                    host_ping_timeout,
                    bootup_watch_period,
@@ -54,7 +54,7 @@ intershell_info = {
     'bmc_diag': {'img_regex': r"udibmc_.*(\.stripped)?$",
                  'exit_cmd': 'exit',
                  'init_wait': 5.0,
-                 'terminator': r": {0,3}$"},
+                 'terminator': r"% {0,3}$"},
 
     'efi_diag': {'img_regex': r"Dsh.efi$",
                  'exit_cmd': 'exit',
@@ -357,7 +357,7 @@ class UCSAgentWrapper(object):
     
     def _trigger_intershell(self, cmd):
         was_intershell = self.intershell
-        if not self.running_locally and len(cmd.split(' ')) == 1:
+        if self.session_info_chain and len(cmd.split(' ')) == 1:
             exe = cmd.split(os.sep)[-1]
             for k, v in intershell_info.items():
                 if re.search(v['img_regex'], cmd):
@@ -425,7 +425,8 @@ class UCSAgentWrapper(object):
         out = None
         out = self.pty.sendcontrol(char)
         if char.lower() == 'c':
-            time.sleep(delay_after_intr)
+            #self._send_line()
+            self.read_until(self.prompt, send_intr_timeout, ignore_error=True)
         return out
     
     def flush(self, delaybeforeflush=0.0, close_handler=False):
@@ -514,7 +515,9 @@ class UCSAgentWrapper(object):
                 time.sleep(time_interval)
 
             self.log(data_rd)
-            if do_expect and not read_completed:
+            # in very occasional cases, the Pty connection dies unnaturally when performing reading,
+            # in this case, nothing will be returned and also shell prompt won't be reached.
+            if do_expect and not read_completed and not self.running_locally:
                 raise TimeoutError('Command exceeded time limit: %r sec' %(timeout),
                                    prompt=self.prompt,
                                    output=data_rd)
@@ -561,7 +564,7 @@ class UCSAgentWrapper(object):
         expects = kwargs.get('expect')
         escapes = kwargs.get('escape')
         # read stream without wait
-        out = self.atomic_read(timeout)
+        out = self.atomic_read(timeout=timeout)
         # check command output
         self.check_cmd_output(out)
 
@@ -671,7 +674,7 @@ class UCSAgentWrapper(object):
     
     def get_pty_current_host(self):
         if self.running_locally: return 'localhost'
-        out = 'unknown'
+        out = 'unknown_host'
         try:
             self.flush()
             host_check_cmd = "ifconfig | awk '/inet addr/{print substr($2,6)}'"
@@ -761,7 +764,7 @@ class UCSAgentWrapper(object):
                 try:
                     out = self.read_until('telnet>', telnet_timeout)
                 except TimeoutError:
-                    raise RuntimeError("Current session should be telnet to serial port: %s"
+                    raise ContextError("Current session should be telnet to serial port: %s"
                                        %(self.current_session))
                 self._send_line('q')
                 first_telnet_index = self.find_first_telnet_session()
@@ -795,7 +798,7 @@ class UCSAgentWrapper(object):
                 if self.host not in host_info and self.prompt != prompt_info:
                     emsg = 'Enter unknown shell, host should be: %s, but read:' %(self.host) + newline + \
                         host_info + newline + 'prompt should be: %s, but read: ' %(self.prompt) + prompt_info
-                    raise RuntimeError(emsg)
+                    raise ContextError(emsg)
             else:
                 self.close_pty()
                 self.reset_agent()
@@ -821,6 +824,14 @@ class UCSAgentWrapper(object):
     def __repr__(self):
         rpr = 'Pty Session Info Dump:' + newline + newline
         rpr = rpr + 'Pty: %r' %(self.pty) + newline
+        rpr = rpr + 'Status: '
+        if self.session_info_chain:
+            if not self.pty or not self.pty.isalive() or self.pty.closed:
+                rpr = rpr + 'Died Unexpectedly' + newline
+            else:
+                rpr = rpr + 'Running Remotely' + newline
+        else:
+            rpr = rpr + 'Running Locally / Stopped' + newline
         rpr = rpr + 'Host: %r' %(self.host) + newline
         rpr = rpr + 'User: %r' %(self.user if hasattr(self, 'user') and self.user else 'unknown') + newline
         rpr = rpr + 'Password: %r' %(self.password if hasattr(self, 'password') and self.password else 'unknown') + newline
