@@ -35,9 +35,11 @@ from const import (local_command_timeout,
                    session_prompt_retry,
                    session_prompt_retry_timeout)
 
-
+# Default shell prompt for local host shell
 LOCAL_SHELL_PROMPT = '>>>'
+# Prompt strings during login process
 PROMPT_WAIT_LOGIN = [r": {0,3}$", r"\? {0,3}$",]
+# Prompt strings for waiting next input
 PROMPT_WAIT_INPUT = [r"\$ {0,3}$", r"# {0,3}$", r"> {0,3}$",]
 
 connect_command_patterns = [r"^telnet$", r"^ssh$", r"^connect host$",]
@@ -49,7 +51,7 @@ command_errors = ['command not found',
                   'invalid input detected',
                   r"Module .* is not found",]
 error_bypass_commands = ['rm', 'ls', '', ]
-
+# Internal interactive shell information dict
 intershell_info = {
     'bmc_diag': {'img_regex': r"udibmc_.*(\.stripped)?$",
                  'exit_cmd': 'exit',
@@ -63,7 +65,7 @@ intershell_info = {
     }
 
 class LoginCases(Enum):
-    """Login cases class for matching login prompt cases."""
+    """Login cases enum for matching prompt cases while performing Pty connecting."""
     INPUT_WAIT_TIMEOUT = r".*timeout.*expired"                              # wait-input timeout, need to send a newline
     CONNECTION_REFUSED = 'connection refused'                               # connection is refused
     INPUT_WAIT_USERNAME = r".*login: {0,3}$|.*us(e)?r: {0,3}$"              # wait to input username
@@ -74,7 +76,7 @@ class LoginCases(Enum):
 
 
 class UCSAgentWrapper(object):
-    """Basic agent class for processing UCS server test."""
+    """Basic UCS agent class."""
     def __init__(self, command_timeout=local_command_timeout, local_prompt=local_shell_prompt, logfile=None):
         global LOCAL_SHELL_PROMPT
         LOCAL_SHELL_PROMPT = local_prompt
@@ -133,8 +135,7 @@ class UCSAgentWrapper(object):
                 raise PtyProcessError('Pty Died Unexpectedly. Need Recovering.')
             return False
 
-        if self.pty:
-            self.close_pty()
+        self.close_pty()
         return True
     
     def _s_verify_term(self, s):
@@ -145,10 +146,11 @@ class UCSAgentWrapper(object):
         if serial_mode: return True     # serial connect doesn't require login info
         return user in s or 'IBMC-SLOT' in s
     
-    def _s_verify_prompt(self, prompt):
+    def _s_verify_prompt(self, prompt, user=None, serial_connect=None):
+        if not user: user = self.user
+        if not serial_connect: serial_connect = self.cisco_sol_mode or self.serial_port_mode
         if prompt and '\n' not in prompt and not utils.ucs_dupsubstr_verify(prompt):
-            serial_connect = self.cisco_sol_mode or self.serial_port_mode
-            return self._s_verify_term(prompt) and self._s_verify_user(prompt, self.user, serial_connect)
+            return self._s_verify_term(prompt) and self._s_verify_user(prompt, user, serial_connect)
         return False
     
     def log(self, data=''):
@@ -177,7 +179,7 @@ class UCSAgentWrapper(object):
         return self.prompt
     
     def _connect(self, cmd, **kwargs):
-        """connect to new shell and reset new shell prompt."""
+        """Connect to new pty and update everything related with post validation."""
         cmd_argv = utils.split_command_args(cmd)
         cmd_word = cmd_argv[0]
         fixed_cmd = ' '.join(cmd_argv)
@@ -264,7 +266,7 @@ class UCSAgentWrapper(object):
                         prompt_info = utils.get_prompt_line(out)
                         serial_connect = is_serial_port_mode or is_cisco_sol_mode
 
-                        if self._s_verify_term(prompt_info) and self._s_verify_user(prompt_info, login_user, serial_connect):
+                        if self._s_verify_prompt(prompt_info, login_user, serial_connect):
                             session_connected = True
 
                         elif serial_connect:
@@ -307,7 +309,7 @@ class UCSAgentWrapper(object):
                         if 'telnet' in fixed_cmd: prompt_read_prev = utils.prompt_strip_date(prompt_read_prev)
                         break
                 retry -= 1
-            if retry == 0: raise ConnectionError('Pty set linesep failed in new session: %s, [%r,%r]'
+            if retry == 0: raise ConnectionError('Pty set linesep failed in new session: %s, [%s, %s]'
                                                  %(connect_session, s, prompt_read_prev))
             # Set pty prompt for new session
             retry = session_prompt_retry
@@ -318,7 +320,7 @@ class UCSAgentWrapper(object):
                 prompt_info = utils.get_prompt_line(s)
                 # Strip dynamic datetime part of prompt for telnet session
                 if 'telnet' in fixed_cmd: prompt_info = utils.prompt_strip_date(prompt_info)
-                if self._s_verify_prompt(prompt_info):
+                if self._s_verify_prompt(prompt_info, login_user, serial_connect):
                     if not prompt_read_prev:
                         prompt_read_prev = prompt_info
                         continue
@@ -329,7 +331,7 @@ class UCSAgentWrapper(object):
                         prompt_read_prev = prompt_read
                         prompt_read = None
                 retry -= 1
-            if retry == 0: raise ConnectionError('Pty set prompt failed in new session: %s, [%r,%r]'
+            if retry == 0: raise ConnectionError('Pty set prompt failed in new session: %s, [%s, %s]'
                                                  %(connect_session, s, prompt_read))
             # Update agent
             self.host = target_host
@@ -556,9 +558,11 @@ class UCSAgentWrapper(object):
         return data_rd
     
     def read_expect(self, timeout=None, **kwargs):
-        """Read with expected strings and certain timeout, this method is specailly 
-        written for UCS test, for instance, you issue a command to start some test item, 
-        wait for it to compelte within certain time, and expect a list of certain patterns."""
+        """Read with expect strings within certain time amount[timeout], this method is 
+        designed for sequenced tests, for instance, you issue commands to launch test sequence, 
+        wait for each test item to complete within given time amount, and meanwhile,
+        expect a list which contains specific patterns that you want to check if the test item's 
+        output involve these patterns or doesn't involve[called escape here] sequentially."""
         if not timeout: timeout = self.command_timeout
 
         expects = kwargs.get('expect')
@@ -577,8 +581,8 @@ class UCSAgentWrapper(object):
         return out
     
     def run_cmd(self, cmd, **kwargs):
-        """Run command method, a wrapper including the process of _send_line and wait 
-        and do expect read."""
+        """Run commands sequentially and update Pty connection status as well as Pty shell status,
+        eg, connecting to new pty and update shell information."""
         command = utils.get_command_word(cmd)
         # Do connecting first
         if re.search(r"|".join(connect_command_patterns), command): return self._connect(cmd, **kwargs)
@@ -630,6 +634,7 @@ class UCSAgentWrapper(object):
         return out
     
     def check_cmd_output(self, out):
+        """Check command output, check if command was successfully sent before and if command is valid."""
         if self.current_cmd and out:
             # check if command is successfully sent
             if not utils.ucs_output_search_command(self.current_cmd, out):
@@ -640,6 +645,7 @@ class UCSAgentWrapper(object):
                 raise InvalidCommand('Invalid command in host: %s' %(self.host), output=out)
     
     def find_session_by_host(self, host):
+        """Find the first matched session by given host argument."""
         walk = 0
         found = -1
         while walk < len(self.session_info_chain):
@@ -651,6 +657,7 @@ class UCSAgentWrapper(object):
         return found
     
     def find_first_telnet_session(self):
+        """Find the first telnet session in session info chain, this is to exit serial port telnet connections."""
         walk = 0
         found = -1
         while walk < len(self.session_info_chain):
@@ -662,6 +669,7 @@ class UCSAgentWrapper(object):
         return found
     
     def find_first_sol_session(self):
+        """Find the frist Cisco Serail Over Lan connection."""
         walk = 0
         found = -1
         while walk < len(self.session_info_chain):
@@ -673,6 +681,7 @@ class UCSAgentWrapper(object):
         return found
     
     def get_pty_current_host(self):
+        """Get current host IP information using Linux command, only works in Linux pty."""
         if self.running_locally: return 'localhost'
         out = 'unknown_host'
         try:
@@ -684,6 +693,9 @@ class UCSAgentWrapper(object):
         return out
     
     def get_pty_prompt(self, intershell=False):
+        """Get current pty shell prompt string with post validation, this method is usually used in setting
+        new pty prompt string after some prompt-impacted command is issued, like cd/FS0[in Uefi shell]/images
+        to start a internal interactive shell[intershell], like tftp, etc."""
         if self.running_locally: return LOCAL_SHELL_PROMPT
 
         if intershell:
@@ -717,6 +729,8 @@ class UCSAgentWrapper(object):
         return 'unknown_prompt'
     
     def pty_ping_host(self, host):
+        """Ping target host from current host, and check if network is accessible. This method is usually used
+        before connecting to target machine."""
         self.flush()
         ping_cmd = 'ping -c 2 ' + host
         out = ''
@@ -728,6 +742,7 @@ class UCSAgentWrapper(object):
         return True if ('seq' in out and 'ttl' in out and 'time' in out) or 'alive' in out else False
     
     def pty_rm_known_hosts(self):
+        """Remove corrupt ssh host file while corrput ssh connection warning is detected."""
         rm_known_hosts_cmd = 'rm -f ~/.ssh/known_hosts'
         try:
             self.flush()
@@ -736,16 +751,18 @@ class UCSAgentWrapper(object):
             pass
     
     def pty_pulse_session(self):
+        """Emit a infinite pulse loop command to pty connection, in case that connection gets automatically 
+        dropped by remote host because of no action within certain timeout."""
         if not self.running_locally:
             pulse_cmd = "while :; do echo 'Hit CTRL+C'; sleep 240; done"
             self.run_cmd(pulse_cmd, timeout=-1)
     
     def quit(self):
+        """Quit current Pty connection, and revert back to previous connection status using session info chain."""
         if self.running_locally:
             session_index = self.find_session_by_host(self.host)
             if session_index >= 0: del self.session_info_chain[session_index:]
             self.close_pty()
-            self.reset_agent()
 
         elif self.intershell:
             self._send_line(intershell_info[self.current_session]['exit_cmd'])
@@ -801,9 +818,9 @@ class UCSAgentWrapper(object):
                     raise ContextError(emsg)
             else:
                 self.close_pty()
-                self.reset_agent()
     
     def close_pty(self):
+        """Safely close currenty Pty connection."""
         if self.pty and not self.pty.closed:
             self.flush()
             msg = 'Close Pty...'
@@ -814,15 +831,16 @@ class UCSAgentWrapper(object):
                 except:
                     time.sleep(0.005)
 
-            self.reset_agent()
+        self.reset_agent()
     
     def close_on_exception(self):
+        """Safely close everything when an uncorrectable exception occurs, and also close logging handler."""
         self.log(newline + newline + repr(self) + newline)
         self.close_pty()
         self.flush(close_handler=True)
     
     def __repr__(self):
-        rpr = 'Pty Session Info Dump:' + newline + newline
+        rpr = 'PTY INFO DUMP:' + newline
         rpr = rpr + 'Pty: %r' %(self.pty) + newline
         rpr = rpr + 'Status: '
         if self.session_info_chain:

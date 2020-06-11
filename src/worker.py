@@ -5,7 +5,7 @@ import errno
 from os import linesep as newline
 import time
 import datetime
-from multiprocessing import Process
+from multiprocessing import Process, Value
 import socket
 import re
 import json
@@ -40,16 +40,22 @@ UNIX_DOMAIN_SOCKET = None
 class SequenceWorker(object):
     """Sequence agent worker class to run sequences, one worker corresponds
     to a specific sequence, parsed from given sequence file."""
-    def __init__(self, sequence_file, loops=1):
+    def __init__(self, global_display_control, sequence_file, loops=1):
         self.sequence_file = sequence_file
-        self.test_sequence = sequence_reader(sequence_file)
         self.logfile = open(utils.new_log_path(sequence=sequence_file.split(os.sep)[-1]), mode='w') if log_enabled else None
+        self.display_control = global_display_control
         self.errordumpfile = None
         self.test_loops = loops
         self.complt_loops = 0
-        self.agent = UCSAgentWrapper(local_prompt=local_shell_prompt, logfile=self.logfile)
         self.errordump = None
         self.spawned_workers= []
+        self.agent = UCSAgentWrapper(local_prompt=local_shell_prompt, logfile=self.logfile)
+        try:
+            self.test_sequence = sequence_reader(sequence_file)
+        except Exception as err:
+            self.stop_display_refresh()
+            self.log_error(err)
+            raise err
     
     def log_error(self, errorinfo):
         if not self.errordumpfile:
@@ -196,7 +202,8 @@ class SequenceWorker(object):
                             if self.errordump: loop_failure_messages.append(repr(self.errordump))
 
                     elif command.action == 'NEW_WORKER':
-                        new_worker = Process(target=run_sequence_worker, args=(command.sequence_file,
+                        new_worker = Process(target=run_sequence_worker, args=(self.display_control,
+                                                                               command.sequence_file,
                                                                                command.loops,))
                         #if command.wait: new_worker.daemon = True
                         new_worker.start()  # Start worker
@@ -222,7 +229,7 @@ class SequenceWorker(object):
                     # DO LOOP RECOVERY
                     if test_recover_retry == 0:
                         err = RecoveryError('Recovery failed after %d retry at loop %d' %(session_recover_retry, self.complt_loops+1))
-                        self.log_error(newline + '****************ERROR END****************' + newline)
+                        self.log_error(newline + '****************ERROR DUMP END****************' + newline)
                         err_msg = newline + repr(err) + newline
                         self.log_error(err_msg + newline)
                         self.stop()
@@ -269,6 +276,7 @@ class SequenceWorker(object):
             error_info = newline + 'DUMP ERROR INFO:' + newline + repr(self.errordump) + newline
             pty_info = 'AGENT INFO:' + newline + repr(self.agent) + newline
             self.log_error(error_info + newline + pty_info + newline)
+            self.errordump = None
 
         if self.agent:
             self.agent.close_on_exception()
@@ -310,7 +318,15 @@ class SequenceWorker(object):
             finally:
                 sock.close()
 
-        if not ipc_msg_sent: raise RuntimeError("Worker message can't be sent: %r" %(tosend))
+        if not ipc_msg_sent:
+            self.stop_display_refresh()
+            error = RuntimeError("Worker message can't be sent: %r" %(tosend))
+            self.log_error(error)
+            raise error
+    
+    def stop_display_refresh(self):
+        if self.display_control is not None:
+            self.display_control.value = 0
 
 
 class Messages(Enum):
@@ -326,8 +342,8 @@ class Messages(Enum):
 
 
 # Sequence Worker entry, to start a worker based on a sequence file
-def run_sequence_worker(sequence_file, loops=1):
-    job = SequenceWorker(sequence_file=sequence_file, loops=loops)
+def run_sequence_worker(global_display_control, sequence_file, loops):
+    job = SequenceWorker(global_display_control=global_display_control, sequence_file=sequence_file, loops=loops)
     if job.logfile and not job.logfile.closed:
         line = '*************THIS IS %s SEQUENCE LOG***************' %('MASTER' if sequence_file == sequence_file_entry else 'SLAVE')
         job.logfile.write(line + newline + newline)
@@ -468,9 +484,12 @@ class MasterWorker(object):
 def start_master(entry_sequence_file, entry_running_loops=1):
     global UNIX_DOMAIN_SOCKET
     UNIX_DOMAIN_SOCKET = utils.new_uds_name(entry_sequence_file)
+    # A shared memory variable, a window display controller which can be set by all workers.
+    global_display_control = Value('b', 1)
     master = MasterWorker(init_sequence_file=entry_sequence_file)
     # start first sequence worker
-    worker = Process(target=run_sequence_worker, args=(entry_sequence_file,
+    worker = Process(target=run_sequence_worker, args=(global_display_control,
+                                                       entry_sequence_file,
                                                        entry_running_loops,))
     #worker.daemon = True
     worker.start()
@@ -480,28 +499,27 @@ def start_master(entry_sequence_file, entry_running_loops=1):
                'LOOPS': entry_running_loops}
     master.update_worker_status(message)
     t_start_prog = time.time()
-    master_running = True
     # window message display
-    while master_running:
+    while global_display_control.value > 0:
         master.update_worker_status(master.recv_ipc_msg())
 
-        window_header = newline + 'RUNNING WORKERS: %d >>>' %(len(master.worker_list)) + newline
+        window_header = newline + newline + 'RUNNING WORKERS: %d ' %(len(master.worker_list)) + newline
         time_consume = str(datetime.timedelta(seconds=int(time.time()-t_start_prog)))
-        window_refresh = window_header + 'TIME CONSUME: %s' %(time_consume) + newline + newline
-        cursor_lines = 4
+        window_display = window_header + 'TIME CONSUME: %s' %(time_consume) + newline + newline
+        cursor_lines = 5
         # quit everything if all test workers finish
         if not master.some_worker_running():
             # handle all messages in buffer
             while master.update_worker_status(master.recv_ipc_msg()):
                 pass
             if master.ipc_sock: master.ipc_sock.close()
-            master_running = False
+            global_display_control.value = 0
 
         # update window display
         for worker in master.worker_list:
             success_loops = worker['SUCCESS_LOOPS']
             failure_loops = worker['FAILURE_LOOPS']
-            window_refresh = window_refresh + \
+            window_display = window_display + \
                 '* Worker [%s]: %d total loops, %d loops PASS, %d loops FAIL ...' %(worker['NAME'],
                                                                                     worker['TOTAL_LOOPS'],
                                                                                     success_loops,
@@ -509,11 +527,11 @@ def start_master(entry_sequence_file, entry_running_loops=1):
             cursor_lines += 1
 
         # print window display lines
-        sys.stdout.write(window_refresh)
+        sys.stdout.write(window_display)
         sys.stdout.flush()
+        time.sleep(window_refresh_interval)
         # to avoid to much system cost
-        if master_running:
-            time.sleep(window_refresh_interval)
+        if global_display_control.value > 0:
             cursor.erase_lines_upward(cursor_lines)
 
     window_summary_display = newline + 'RESULT SUMMARY:' + newline + newline
@@ -538,3 +556,6 @@ def start_master(entry_sequence_file, entry_running_loops=1):
     if master.failure_logfile and not master.failure_logfile.closed:
         master.failure_logfile.flush()
         master.failure_logfile.close()
+    # Remove unix domain sock file
+    if UNIX_DOMAIN_SOCKET: os.remove(UNIX_DOMAIN_SOCKET)
+

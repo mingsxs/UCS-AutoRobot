@@ -45,6 +45,10 @@ class SequenceCommand(object):
     def __setitem__(self, key, value):
         setattr(self, key, value)
     
+    @property
+    def cmd_dict(self):
+        return self.__dict__
+    
     def __repr__(self):
         clsname = type(self).__name__
         rpr = self.command
@@ -72,10 +76,6 @@ class SequenceCommand(object):
             rpr = '%s, expect: %r, escape: %r, timeout: %r' %(rpr, expect, escape, timeout)
 
         return rpr
-    
-    @property
-    def cmd_dict(self):
-        return self.__dict__
 
 # parse expect info
 def sequence_expect_parser(expect_info):
@@ -101,7 +101,7 @@ def sequence_escape_parser(escape_info):
 
     return escapes
 
-
+# parse sequence lines
 def sequence_line_parser(line):
     line = line.rstrip(' ' + seq_item_delimiter + seq_subitem_delimiter + newline)
     line = line.lstrip(' ' + seq_subitem_delimiter + newline)
