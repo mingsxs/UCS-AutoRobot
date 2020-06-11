@@ -1,2 +1,2 @@
 # UCS-AutoRobot
-A Python-based test automation framework for UCS servers.
+A Python-based multiprocess-capable test automation framework for UCS servers.
