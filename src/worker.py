@@ -551,7 +551,7 @@ def start_master(entry_sequence_file, entry_running_loops=1):
     sys.stdout.write(window_summary_display)
     sys.stdout.write(newline)
     sys.stdout.write('Failure log dumped to: %s' %(master.failure_logfile.name if master.failure_logfile else 'NONE'))
-    sys.stdout.write(newline)
+    sys.stdout.write(newline + newline)
     sys.stdout.flush()
     if master.failure_logfile and not master.failure_logfile.closed:
         master.failure_logfile.flush()
