@@ -33,7 +33,8 @@ from const import (local_command_timeout,
                    session_connect_retry,
                    session_recover_retry,
                    session_prompt_retry,
-                   session_prompt_retry_timeout)
+                   session_prompt_retry_timeout,
+                   wait_passphrase_timeout)
 
 # Default shell prompt for local host shell
 LOCAL_SHELL_PROMPT = '>>>'
@@ -41,15 +42,20 @@ LOCAL_SHELL_PROMPT = '>>>'
 PROMPT_WAIT_LOGIN = [r": {0,3}$", r"\? {0,3}$",]
 # Prompt strings for waiting next input
 PROMPT_WAIT_INPUT = [r"\$ {0,3}$", r"# {0,3}$", r"> {0,3}$",]
-
+# Command patterns to establish connection
 connect_command_patterns = [r"^telnet$", r"^ssh$", r"^connect host$",]
+# Command patterns to quit connection
 quit_command_patterns = [r"^quit$", r"^exit$", r"^ctrl.?(\]|x)$",]
+# Command patterns to wait passphrase
+waitpassphrase_command_patterns = [r".*(password|pass ?phrase).*:{0,2}$",]
+# Command error messages
 command_errors = ['command not found',
                   'no such file or directory',
                   'Is a directory',
                   'is not recognized as an internal or external command',
                   'invalid input detected',
                   r"Module .* is not found",]
+# Commands which doesn't require error message check
 error_bypass_commands = ['rm', 'ls', '', ]
 # Internal interactive shell information dict
 intershell_info = {
@@ -620,16 +626,24 @@ class UCSAgentWrapper(object):
                 self._send_line()
             # Capturing and checking command output
             self.current_cmd = cmd
-            try:
-                out = self.read_expect(timeout=timeout, expect=expects, escape=escapes)
-            except SendIncorrectCommand as err:
-                global session_recover_retry
-                if session_recover_retry == 0: raise err
+            if kwargs.get('wait_passphrase'):
+                try:
+                    out = self.read_until(expects, wait_passphrase_timeout)
+                except TimeoutError as err:
+                    out = err.output
+                    complement = utils.ucs_fuzzy_complement(out, cmd)
+                    self._send_all(complement + self.pty_linesep)
+            else:
+                try:
+                    out = self.read_expect(timeout=timeout, expect=expects, escape=escapes)
+                except SendIncorrectCommand as err:
+                    global session_recover_retry
+                    if session_recover_retry == 0: raise err
 
-                session_recover_retry -= 1
-                return self.run_cmd(cmd, **kwargs)
-            except:
-                raise
+                    session_recover_retry -= 1
+                    return self.run_cmd(cmd, **kwargs)
+                except:
+                    raise
 
         return out
     

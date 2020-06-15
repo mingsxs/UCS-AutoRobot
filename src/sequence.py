@@ -3,7 +3,8 @@ from os import linesep as newline
 import re
 
 from agent import (connect_command_patterns,
-                   quit_command_patterns)
+                   quit_command_patterns,
+                   waitpassphrase_command_patterns)
 from const import (seq_comment_header,
                    seq_continue_nextline,
                    seq_item_delimiter,
@@ -107,7 +108,7 @@ def sequence_line_parser(line):
     line = line.lstrip(' ' + seq_subitem_delimiter + newline)
     # skip empty lines
     if not line: return None
-    # do parsing
+    # do sequence line parsing
     seq_items = [x.strip() for x in line.split(seq_item_delimiter) if x.strip()]
     seq_item_count = len(seq_items)
     seq_cmd_args = [x for x in seq_items[0].split(' ') if x]
@@ -117,10 +118,10 @@ def sequence_line_parser(line):
     seq_cmd_inst['command'] = ' '.join(seq_cmd_args)
     seq_cmd_inst['argv'] = seq_cmd_args
     seq_cmd_inst['internal'] = False
-    seq_cmd_inst['action'] = 'SEND'  # default commands are sending mode
-    # index item from list if item exists else return None obj
+    seq_cmd_inst['action'] = 'SEND'
+    # lambda function for indexing list items
     g = lambda x, i: x[i] if i < len(x) else None
-    # parse internal commands
+    # PARSE INTERNAL COMMANDS
     for k, v in COMMAND_ACTION_MAP.items():
         if re.search(k, cmd_keyword):
             seq_cmd_inst['internal'] = True
@@ -141,7 +142,7 @@ def sequence_line_parser(line):
     if seq_item_count > 4:
         raise SequenceError('Invalid syntax for %s command: %s' \
                             %("INTERNAL" if seq_cmd_inst.internal else "SENDING", line))
-    # parse connect commands
+    # PARSE CONNECTION COMMANDS
     if re.search(r"|".join(connect_command_patterns), cmd_keyword):
         seq_cmd_inst['action'] = 'CONNECT'
         if cmd_keyword == 'ssh' and '@' in seq_cmd_args[1]:
@@ -172,7 +173,7 @@ def sequence_line_parser(line):
         if cmd_keyword == 'ssh' and '@' not in seq_cmd_args[1] and seq_cmd_inst['user']:
             seq_cmd_inst['argv'][1] = seq_cmd_inst['user'] + '@' + seq_cmd_args[1]
             seq_cmd_inst['command'] = ' '.join(seq_cmd_inst['argv'])
-    # parse normal commands or internal `SEND_ENTER` commands
+    # PARSE NORMAL SENDING COMMANDS OR INTERNAL 'SEND-ENTER' COMMAND as they need to match prompt
     else:
         if seq_cmd_inst['action'] == 'SEND':
             seq_cmd_inst['bg_run'] = True if seq_cmd_inst['command'][-1] == '&' else False
@@ -188,6 +189,10 @@ def sequence_line_parser(line):
             escape_info = g(seq_items, 2)
             seq_cmd_inst['expect'] = sequence_expect_parser(expect_info)
             seq_cmd_inst['escape'] = sequence_escape_parser(escape_info)
+            seq_cmd_inst['wait_passphrase'] = False
+            if len(seq_cmd_inst.expect) == 1 and \
+                    re.search(waitpassphrase_command_patterns, seq_cmd_inst.expect, re.I):
+                seq_cmd_inst['wait_passphrase'] = True
 
     return seq_cmd_inst
 

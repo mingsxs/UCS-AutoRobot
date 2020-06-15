@@ -32,6 +32,7 @@ remote_command_timeout = 120.0              # timeout for command which is runni
 intershell_command_timeout = 300.0          # timeout for command which is running inside intershell
 host_ping_timeout = 8.0                     # internal timeout const
 send_intr_timeout = 0.6                     # internal timeout const
+wait_passphrase_timeout = 5.0               # internal timeout const
 
 delay_after_quit = 0.8                      # internal delay const
 delay_before_prompt_flush = 0.2             # internal delay const
