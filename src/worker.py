@@ -157,7 +157,6 @@ class SequenceWorker(object):
 
                     elif command.action == 'CLOSE':
                         self.agent.close_pty()
-                        self.agent.flush()
 
                     elif command.action == 'PULSE':
                         try:
@@ -264,6 +263,7 @@ class SequenceWorker(object):
                            'MSG_Q': loop_failure_messages}
             self.send_ipc_msg(ipc_message)
             # move on to next loop
+            self.agent.close_pty()
             self.complt_loops += 1
     
     def stop(self):

@@ -19,7 +19,6 @@ from const import (local_command_timeout,
                    intershell_command_timeout,
                    ssh_timeout,
                    telnet_timeout,
-                   connect_host_timeout,
                    default_connect_timeout,
                    local_shell_prompt,
                    delay_after_quit,
@@ -43,7 +42,7 @@ PROMPT_WAIT_LOGIN = [r": {0,3}$", r"\? {0,3}$",]
 # Prompt strings for waiting next input
 PROMPT_WAIT_INPUT = [r"\$ {0,3}$", r"# {0,3}$", r"> {0,3}$",]
 # Command patterns to establish connection
-connect_command_patterns = [r"^telnet$", r"^ssh$", r"^connect host$",]
+connect_command_patterns = [r"^telnet$", r"^ssh$", r"^connect +host$", r"^solshell +-X$",]
 # Command patterns to quit connection
 quit_command_patterns = [r"^quit$", r"^exit$", r"^ctrl.?(\]|x)$",]
 # Command patterns to wait passphrase
@@ -202,8 +201,6 @@ class UCSAgentWrapper(object):
             connect_timeout = kwargs['timeout'] if kwargs.get('timeout') else ssh_timeout
         elif 'telnet' in fixed_cmd:
             connect_timeout = kwargs['timeout'] if kwargs.get('timeout') else telnet_timeout
-        elif 'connect host' == fixed_cmd:
-            connect_timeout = connect_host_timeout
         else:
             connect_timeout = default_connect_timeout
 
@@ -220,8 +217,9 @@ class UCSAgentWrapper(object):
                 self._send_line(fixed_cmd)
             # login process
             # list the cases that login doesn't require login info, like user and password
-            if fixed_cmd == 'connect host':
+            if fixed_cmd == 'connect host' or 'solshell' in fixed_cmd:
                 nexts = PROMPT_WAIT_INPUT
+                self._send_all('\r\n')
             elif is_serial_port_mode:
                 nexts = PROMPT_WAIT_INPUT
                 self._send_all('\n')
