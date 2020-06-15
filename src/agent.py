@@ -47,7 +47,7 @@ connect_command_patterns = [r"^telnet$", r"^ssh$", r"^connect host$",]
 # Command patterns to quit connection
 quit_command_patterns = [r"^quit$", r"^exit$", r"^ctrl.?(\]|x)$",]
 # Command patterns to wait passphrase
-waitpassphrase_command_patterns = [r".*(password|pass ?phrase).*:{0,2}$",]
+waitpassphrase_command_pattern = r".*(password|pass ?phrase).*:{0,2}$"
 # Command error messages
 command_errors = ['command not found',
                   'no such file or directory',
@@ -636,12 +636,14 @@ class UCSAgentWrapper(object):
             else:
                 try:
                     out = self.read_expect(timeout=timeout, expect=expects, escape=escapes)
-                except SendIncorrectCommand as err:
-                    global session_recover_retry
-                    if session_recover_retry == 0: raise err
-
-                    session_recover_retry -= 1
-                    return self.run_cmd(cmd, **kwargs)
+                except SendIncorrectCommand as err: # command is incorrectly sent
+                    if kwargs.get('text_invisible'):
+                        out = err.output
+                    else:
+                        global session_recover_retry
+                        if session_recover_retry == 0: raise err
+                        session_recover_retry -= 1
+                        return self.run_cmd(cmd, **kwargs)
                 except:
                     raise
 

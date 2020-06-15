@@ -4,7 +4,7 @@ import re
 
 from agent import (connect_command_patterns,
                    quit_command_patterns,
-                   waitpassphrase_command_patterns)
+                   waitpassphrase_command_pattern)
 from const import (seq_comment_header,
                    seq_continue_nextline,
                    seq_item_delimiter,
@@ -191,10 +191,16 @@ def sequence_line_parser(line):
             seq_cmd_inst['escape'] = sequence_escape_parser(escape_info)
             seq_cmd_inst['wait_passphrase'] = False
             if len(seq_cmd_inst.expect) == 1 and \
-                    re.search(waitpassphrase_command_patterns, seq_cmd_inst.expect, re.I):
+                    re.search(waitpassphrase_command_pattern, seq_cmd_inst.expect[0], re.I):
                 seq_cmd_inst['wait_passphrase'] = True
 
     return seq_cmd_inst
+
+
+def sequence_finalize(test_seq):
+    for index, item in enumerate(test_seq):
+        if item['wait_passphrase']:
+            test_seq[index+1]['text_invisible'] = True
 
 
 def sequence_reader(sequence_file):
@@ -218,4 +224,7 @@ def sequence_reader(sequence_file):
                     preserved_line = ''
                 inst = sequence_line_parser(line)
                 if inst: test_seq.append(inst)
+
+    sequence_finalize(test_seq)
+
     return test_seq
