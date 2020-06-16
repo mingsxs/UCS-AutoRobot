@@ -272,9 +272,8 @@ class UCSAgentWrapper(object):
 
                         if self._s_verify_prompt(prompt_info, login_user, serial_connect):
                             session_connected = True
-
                         elif serial_connect:
-                            # watch if system is booting up, only watch serial connection systems
+                            # watch system booting, only serially connected system will be watched.
                             t_end_watch = time.time() + bootup_watch_timeout
                             while time.time() <= t_end_watch:
                                 self._send_all('\r\n')
@@ -630,7 +629,7 @@ class UCSAgentWrapper(object):
                 except TimeoutError as err:
                     out = err.output
                     complement = utils.ucs_fuzzy_complement(out, cmd)
-                    self._send_all(complement + self.pty_linesep)
+                    if complement: self._send_all(complement + self.pty_linesep)
             else:
                 try:
                     out = self.read_expect(timeout=timeout, expect=expects, escape=escapes)

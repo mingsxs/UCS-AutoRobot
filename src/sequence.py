@@ -189,9 +189,10 @@ def sequence_line_parser(line):
             escape_info = g(seq_items, 2)
             seq_cmd_inst['expect'] = sequence_expect_parser(expect_info)
             seq_cmd_inst['escape'] = sequence_escape_parser(escape_info)
-            seq_cmd_inst['wait_passphrase'] = False
-            if len(seq_cmd_inst.expect) == 1 and \
-                    re.search(waitpassphrase_command_pattern, seq_cmd_inst.expect[0], re.I):
+            # command needs to wait for passphrase, which means the prompt will be invisible.
+            if seq_cmd_inst['expect'] is not None and \
+                    len(seq_cmd_inst['expect']) == 1 and \
+                    re.search(waitpassphrase_command_pattern, seq_cmd_inst['expect'][0], re.I):
                 seq_cmd_inst['wait_passphrase'] = True
 
     return seq_cmd_inst
@@ -199,6 +200,7 @@ def sequence_line_parser(line):
 
 def sequence_finalize(test_seq):
     for index, item in enumerate(test_seq):
+        # pass phrase is invisible in Pty terminal.
         if item['wait_passphrase']:
             test_seq[index+1]['text_invisible'] = True
 
