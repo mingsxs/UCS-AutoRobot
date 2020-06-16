@@ -2,7 +2,7 @@ import os
 from os import linesep as newline
 import re
 
-from agent import (connect_command_patterns,
+from agent import (connect_commands,
                    quit_command_patterns,
                    waitpassphrase_command_pattern)
 from const import (seq_comment_header,
@@ -143,7 +143,7 @@ def sequence_line_parser(line):
         raise SequenceError('Invalid syntax for %s command: %s' \
                             %("INTERNAL" if seq_cmd_inst.internal else "SENDING", line))
     # PARSE CONNECTION COMMANDS
-    if re.search(r"|".join(connect_command_patterns), cmd_keyword):
+    if cmd_keyword in connect_commands:
         seq_cmd_inst['action'] = 'CONNECT'
         if cmd_keyword == 'ssh' and '@' in seq_cmd_args[1]:
             seq_cmd_inst['user'] = seq_cmd_args[1][:seq_cmd_args[1].index('@')]

@@ -42,7 +42,7 @@ PROMPT_WAIT_LOGIN = [r": {0,3}$", r"\? {0,3}$",]
 # Prompt strings for waiting next input
 PROMPT_WAIT_INPUT = [r"\$ {0,3}$", r"# {0,3}$", r"> {0,3}$",]
 # Command patterns to establish connection
-connect_command_patterns = [r"^telnet$", r"^ssh$", r"^connect +host$", r"^solshell +-X$",]
+connect_commands = ["telnet", "ssh", "connect", "solshell",]
 # Command patterns to quit connection
 quit_command_patterns = [r"^quit$", r"^exit$", r"^ctrl.?(\]|x)$",]
 # Command patterns to wait passphrase
@@ -192,18 +192,27 @@ class UCSAgentWrapper(object):
         login_user = kwargs.get('user')
         login_password = kwargs.get('password')
         do_boot_check = kwargs.get('boot_expect') or kwargs.get('boot_escape')
-        target_host = cmd_args[0][cmd_args[0].find('@')+1: ]
-        telnet_port = int(cmd_args[1]) if 'telnet' in fixed_cmd and len(cmd_args) > 1 else 0
-        connect_session = '%s %s' %(cmd_word, target_host) + (' %d' %(telnet_port) if telnet_port else '')
-        is_serial_port_mode = True if telnet_port >= base_serial_port else False
-        # connect timeout
+        # initialize host information
+        target_host = self.host
+        connect_session = cmd
+        is_serial_port_mode = False
+        do_remote_connect = True
+        # initialize connect timeout
         if 'ssh' in fixed_cmd:
             connect_timeout = kwargs['timeout'] if kwargs.get('timeout') else ssh_timeout
         elif 'telnet' in fixed_cmd:
             connect_timeout = kwargs['timeout'] if kwargs.get('timeout') else telnet_timeout
         else:
+            # establish local connection
+            do_remote_connect = False
             connect_timeout = default_connect_timeout
-
+        # fix host information based on arguments
+        if do_remote_connect:
+            target_host = cmd_args[0][cmd_args[0].find('@')+1: ]
+            telnet_port = int(cmd_args[1]) if 'telnet' in fixed_cmd and len(cmd_args) > 1 else -1
+            connect_session = '%s %s' %(cmd_word, target_host) + (' %d' %(telnet_port) if telnet_port > 0 else '')
+            if telnet_port >= base_serial_port: is_serial_port_mode = True
+        # do session connecting with retry
         session_connected = False
         connect_retry = session_connect_retry
         while connect_retry > 0 and not session_connected:
@@ -212,17 +221,14 @@ class UCSAgentWrapper(object):
                 self.log('%s %s' %(self.prompt, cmd) + newline)
                 self.pty = ptyprocess.PtyProcess.spawn(argv=cmd_argv)
             else:
-                if ('ssh' in fixed_cmd or 'telnet' in fixed_cmd) and not self.pty_ping_host(target_host):
+                if do_remote_connect and not self.pty_ping_host(target_host):
                     raise ConnectionError('Host [%s] unaccessible from: %s' %(target_host, self.host))
                 self._send_line(fixed_cmd)
-            # login process
-            # list the cases that login doesn't require login info, like user and password
-            if fixed_cmd == 'connect host' or 'solshell' in fixed_cmd:
+            # handle login process
+            # only remote connections will require login info
+            if is_serial_port_mode or not do_remote_connect:
                 nexts = PROMPT_WAIT_INPUT
                 self._send_all('\r\n')
-            elif is_serial_port_mode:
-                nexts = PROMPT_WAIT_INPUT
-                self._send_all('\n')
             else:
                 nexts = PROMPT_WAIT_LOGIN
             login_password_sent = False
@@ -586,9 +592,8 @@ class UCSAgentWrapper(object):
     def run_cmd(self, cmd, **kwargs):
         """Run commands sequentially and update Pty connection status as well as Pty shell status,
         eg, connecting to new pty and update shell information."""
-        command = utils.get_command_word(cmd)
         # Do connecting first
-        if re.search(r"|".join(connect_command_patterns), command): return self._connect(cmd, **kwargs)
+        if kwargs.get('action') == 'CONNECT': return self._connect(cmd, **kwargs)
         # Handle other commands
         timeout = kwargs.get('timeout')
         expects = kwargs.get('expect')
@@ -611,7 +616,7 @@ class UCSAgentWrapper(object):
         else:
             self._send_line(cmd)
             # Handling commands which reset pty shell prompt
-            prompt_set_filter = [command == 'cd',
+            prompt_set_filter = [utils.get_command_word(cmd) == 'cd',
                                  self._trigger_intershell(cmd),
                                  kwargs.get('action') == 'FIND', ]
             if any(prompt_set_filter):
