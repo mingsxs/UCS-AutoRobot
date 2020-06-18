@@ -23,15 +23,15 @@ seq_item_delimiter = ';'                    # sequence line syntax for spliting 
 seq_subitem_delimiter = ','                 # sequence line syntax for spliting subitems
 
 # timeout definitions
-ssh_timeout = 30.0                          # default ssh connect timeout
+ssh_timeout = 20.0                          # default ssh connect timeout
 telnet_timeout = 20.0                       # default telnet connect timeout
-default_connect_timeout = 20.0              # internal timeout const
+default_connect_timeout = 15.0              # internal timeout const
 local_command_timeout = 60.0                # timeout for command which is running in local shell
 remote_command_timeout = 120.0              # timeout for command which is running in pty connection
 intershell_command_timeout = 300.0          # timeout for command which is running inside intershell
 host_ping_timeout = 8.0                     # internal timeout const
 send_intr_timeout = 0.6                     # internal timeout const
-wait_passphrase_timeout = 5.0               # internal timeout const
+wait_passphrase_timeout = 8.0               # internal timeout const
 
 delay_after_quit = 0.8                      # internal delay const
 delay_before_prompt_flush = 0.2             # internal delay const

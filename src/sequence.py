@@ -175,8 +175,6 @@ def sequence_line_parser(line):
             seq_cmd_inst['command'] = ' '.join(seq_cmd_inst['argv'])
     # PARSE NORMAL SENDING COMMANDS OR INTERNAL 'SEND-ENTER' COMMAND as they need to match prompt
     else:
-        if seq_cmd_inst['action'] == 'SEND':
-            seq_cmd_inst['bg_run'] = True if seq_cmd_inst['command'][-1] == '&' else False
         if not seq_cmd_inst['internal'] or seq_cmd_inst['action'] == 'ENTER':
             if seq_item_count > 1:
                 try:
@@ -189,19 +187,21 @@ def sequence_line_parser(line):
             escape_info = g(seq_items, 2)
             seq_cmd_inst['expect'] = sequence_expect_parser(expect_info)
             seq_cmd_inst['escape'] = sequence_escape_parser(escape_info)
-            # command needs to wait for passphrase, which means the prompt will be invisible.
-            if seq_cmd_inst['expect'] is not None and \
-                    len(seq_cmd_inst['expect']) == 1 and \
-                    re.search(waitpassphrase_command_pattern, seq_cmd_inst['expect'][0], re.I):
-                seq_cmd_inst['wait_passphrase'] = True
 
     return seq_cmd_inst
 
 
 def sequence_finalize(test_seq):
     for index, item in enumerate(test_seq):
-        # pass phrase is invisible in Pty terminal.
-        if item['wait_passphrase']:
+        # commands which will run in background mode
+        if item['action'] == 'SEND':
+            test_seq[index]['bg_run'] = True if item['command'][-1] == '&' else False
+        # command needs to wait for passphrase, which means the prompt will be invisible.
+        if item['expect'] is not None and \
+                len(item['expect']) == 1 and \
+                re.search(waitpassphrase_command_pattern, item['expect'][0], re.I):
+            test_seq[index]['command_wait_passphrase'] = True
+            # pass phrase is invisible in Pty terminal.
             test_seq[index+1]['text_invisible'] = True
 
 

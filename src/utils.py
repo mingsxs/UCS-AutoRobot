@@ -67,6 +67,22 @@ class SendIncorrectCommand(Exception):
             rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline
         return rpr
 
+class ErrorTryAgain(Exception):
+    """Notify that should try again."""
+    def __init__(self, *args, **kw):
+        super(ErrorTryAgain, self).__init__(*args)
+        self.prompt = kw.get('prompt')
+        self.output = kw.get('output')
+
+    def __repr__(self):
+        rpr = 'Error Try Again: '
+        rpr = rpr + (self.args[0] if self.args else 'NULL') + newline
+        if self.prompt:
+            rpr = rpr + 'SHELL PROMPT:' + newline + self.prompt + newline + newline
+        if self.output:
+            rpr = rpr + 'READ OUTPUT:' + newline + self.output + newline
+        return rpr
+
 class InvalidCommand(Exception):
     '''Invalid Command.'''
     def __init__(self, *args, **kw):
@@ -376,21 +392,19 @@ def ucs_output_search_command(cmd, out):
     if not cmd or not out: return False
     if out.startswith(cmd): return True
 
-    firstline = out.split('\r\n' if '\r\n' in out else '\n')[0]
-
     cmdpos = linepos = 0
     cmdlen = len(cmd)
-    linelen = len(firstline)
+    linelen = len(out)
     reversecheck = False
     while 0 <= cmdpos < cmdlen and linepos < linelen:
-        if cmd[cmdpos] == firstline[linepos]:
+        if cmd[cmdpos] == out[linepos]:
             cmdpos += 1
             linepos += 1
         else:
-            if firstline[linepos] == '\r':
+            if out[linepos] == '\r':
                 linepos += 1
                 reversecheck = True
-            elif firstline[linepos] == ' ' and firstline[linepos+1] == '\r':
+            elif out[linepos] == ' ' and out[linepos+1] == '\r':
                 linepos += 2
                 reversecheck = True
             elif reversecheck:

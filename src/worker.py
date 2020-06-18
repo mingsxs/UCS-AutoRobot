@@ -28,7 +28,8 @@ from utils import (ExpectError,
                    TimeoutError,
                    FileError,
                    RecoveryError)
-from sequence import sequence_reader
+from sequence import (sequence_reader,
+                      SequenceCommand)
 import cursor
 
 #mpl = multiprocessing.log_to_stderr()
@@ -75,21 +76,21 @@ class SequenceWorker(object):
         if not isinstance(error, (ExpectError, TimeoutError)):
             trace_msg = '%s: ' %(error.__class__.__name__) + trace_msg
         command_msg = 'Command: %s' %(cmd if cmd else 'ENTER') + newline
-        session_msg = 'Running session: %s' %(self.agent.current_session) + newline
+        session_msg = 'Session: %s' %(self.agent.current_session) + newline
         sequence_msg = 'Sequence: %s' %(self.sequence_file) + newline
-        loop_msg = 'Running loop: %d' %(self.complt_loops+1) + newline
+        loop_msg = 'Loop: %d' %(self.complt_loops+1) + newline
         emsg = trace_msg + command_msg + session_msg + sequence_msg + loop_msg
         return emsg
-
-    def run_item(self, cmd, **kw):
+    
+    def run_sequence_command(self, command):
         result = Messages.ITEM_RESULT_PASS
         message = None
         output = ''
         try:
-            output = self.agent.run_cmd(cmd=cmd, **kw)
+            output = self.agent.run_cmd(**command.cmd_dict)
         # This is the main entry for handling Worker/Agent Errors.
         except Exception as err:
-            err_msg = self.format_error_message(cmd, err)
+            err_msg = self.format_error_message(command.command, err)
             err_to_raise = None
             # Handling Expect Errors
             if isinstance(err, ExpectError):
@@ -179,16 +180,18 @@ class SequenceWorker(object):
                             loop_failure_messages = [repr(err)]
 
                     elif command.action == 'ENTER':
-                        self.run_item('', **command.cmd_dict)
+                        command.command = ''
+                        self.run_sequence_command(command)
 
                     elif command.action == 'FIND':
                         target_found = False
                         outputs = []
                         for d in command.find_dir:
-                            if not re.search(r"^FS\d+:$", d.strip()) and 'cd' not in d:
-                                d = 'cd ' + d
-                            self.run_item(d, **command.cmd_dict)
-                            result, message, output = self.run_item('ls', action='SEND')
+                            if 'cd' in d or re.search(r"^FS\d+:$", d.strip()): command.command = d
+                            else: command.command = 'cd ' + d
+                            self.run_sequence_command(command)
+                            result, message, output = self.run_sequence_command(SequenceCommand(action='SEND',
+                                                                                                command='ls'))
                             outputs.append(output)
                             if utils.in_search(command.target_file, output):
                                 target_found = True
@@ -216,7 +219,7 @@ class SequenceWorker(object):
                         self.spawned_workers.append(new_worker)
 
                 else:
-                    result, message, output = self.run_item(command.command, **command.cmd_dict)
+                    result, message, output = self.run_sequence_command(command)
                     if result == Messages.ITEM_RESULT_UNKNOWN:
                         loop_result = Messages.LOOP_RESULT_UNKNOWN
                         loop_failure_messages = [repr(self.errordump)]
