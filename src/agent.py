@@ -445,7 +445,7 @@ class UCSAgentWrapper(object):
                 # doesn't know that, then this output will be a substring of the sending command,
                 # like, command: run UPI DISPLAY-CONFIGURATION, output: run UPI DIS
                 # A TimeoutError will be raised here, but the process is good to continue
-                comp = ucs_fuzzy_complement(senderr.output, text)
+                comp = utils.ucs_fuzzy_complement(senderr.output, text)
                 if comp: return self._ensure_send_line(text=comp, text_visible=text_visible)
 
         self._send_all(self.pty_linesep)
