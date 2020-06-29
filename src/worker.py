@@ -28,8 +28,8 @@ from utils import (ExpectError,
                    TimeoutError,
                    FileError,
                    RecoveryError)
-from sequence import (sequence_reader,
-                      SequenceCommand)
+from sequence import sequence_reader
+from builtin import BuiltinCommand
 import cursor
 
 #mpl = multiprocessing.log_to_stderr()
@@ -88,6 +88,7 @@ class SequenceWorker(object):
         output = ''
         try:
             output = self.agent.run_cmd(**command.cmd_dict)
+
         # This is the main entry for handling Worker/Agent Errors.
         except Exception as err:
             err_msg = self.format_error_message(command.command, err)
@@ -137,7 +138,7 @@ class SequenceWorker(object):
             self.spawned_workers = []
             while current < total:
                 command = self.test_sequence[current]
-                if command.internal:
+                if command.builtin:
                     if command.action == 'INTR':
                         try:
                             self.agent.send_control('c')
@@ -190,8 +191,8 @@ class SequenceWorker(object):
                             if 'cd' in d or re.search(r"^FS\d+:$", d.strip()): command.command = d
                             else: command.command = 'cd ' + d
                             self.run_sequence_command(command)
-                            result, message, output = self.run_sequence_command(SequenceCommand(action='SEND',
-                                                                                                command='ls'))
+                            result, message, output = self.run_sequence_command(BuiltinCommand(action='SEND',
+                                                                                               command='ls'))
                             outputs.append(output)
                             if utils.in_search(command.target_file, output):
                                 target_found = True
@@ -217,6 +218,16 @@ class SequenceWorker(object):
                         # wait for derived sequence worker to complete if wait flag is set
                         if command.wait: new_worker.join()
                         self.spawned_workers.append(new_worker)
+
+                    elif command.action == 'MONITOR':
+                        cont = True
+                        while cont:
+                            result, message, output = self.run_sequence_command(command)
+                            for w in command.watch:
+                                if w in output:
+                                    cont = False
+                                    break
+                            if cont: time.sleep(command.interval if command.interval > 0 else 0)
 
                 else:
                     result, message, output = self.run_sequence_command(command)

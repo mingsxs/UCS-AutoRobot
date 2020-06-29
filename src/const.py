@@ -13,6 +13,7 @@ session_prompt_retry = 4                    # session prompt set/get retry count
 session_prompt_retry_timeout = 5            # session prompt set/get retry timeout
 max_sequences = 5                           # maximum worker processes
 window_refresh_interval = 5.0               # time period for refreshing window result printing
+builtin_monitor_interval = 3.0              # time period for builtin monitor command
 prompt_offset_range = 16                    # offset range to check if prompt string is reached
 base_serial_port = 2003                     # base serial port for telnet connection
 
