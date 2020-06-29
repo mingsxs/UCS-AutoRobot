@@ -3,7 +3,7 @@ import argparse
 import const
 
 NAME = 'UCS AutoRobot'
-VERSION = '2.4.7'
+VERSION = '2.4.8'
 AUTHOR = "Ming Li(mingli5@cisco.com)."
 
 # feed command line arguments
