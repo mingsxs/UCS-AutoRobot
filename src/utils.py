@@ -491,6 +491,21 @@ def reversed_find_term(startpos, p, s):
     return (cursor - slen)
 
 
+def sequence_item_split(line, delimiter=';'):
+    line = _str(line).strip(delimiter)
+    items = [item for item in line.split(delimiter) if item]
+
+    # parse items containing escape charater
+    cur = len(items) - 1
+    while cur >= 0:
+        cur = cur - 1
+        if ord(items[cur][-1]) == 92:
+            items[cur] = items[cur][0:-1] + delimiter + items[cur+1]
+            del items[cur+1]
+
+    return items
+
+
 def local_run_cmd(cmd, timeout=None):
     with Popen(cmd.strip(), stdout=PIPE, stderr=PIPE, shell=True, close_fds=(os.name=='posix')) as process:
         timeout = timeout if timeout and timeout > 0 else None

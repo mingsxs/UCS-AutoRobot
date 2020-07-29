@@ -17,10 +17,19 @@ import utils
 from utils import SequenceError
 
 
+def sequence_check_builtin_syntax(word, line, limit, count):
+    if count > limit:
+        raise SequenceError('Invalid syntax for BUILTIN command %s: %s' %(word, line))
+
+def sequence_check_normal_syntax(word, line, limit, count):
+    if count > limit:
+        raise SequenceError('Invalid syntax for SENDING command %s: %s' %(word, line))
+
 # parse expect info
 def sequence_expect_parser(expect_info):
     if expect_info:
-        expects = [x.strip() for x in expect_info.split(seq_subitem_delimiter) if x.strip()]
+        #expects = [x.strip() for x in expect_info.split(seq_subitem_delimiter) if x.strip()]
+        expects = utils.sequence_item_split(expect_info, seq_subitem_delimiter)
     else:
         expects = []
 
@@ -33,7 +42,8 @@ def sequence_expect_parser(expect_info):
 # parse escape info
 def sequence_escape_parser(escape_info):
     if escape_info:
-        escapes = [x.strip() for x in escape_info.split(seq_subitem_delimiter) if x.strip()]
+        #escapes = [x.strip() for x in escape_info.split(seq_subitem_delimiter) if x.strip()]
+        escapes = utils.sequence_item_split(escape_info, seq_subitem_delimiter)
     else:
         escapes = []
 
@@ -43,15 +53,16 @@ def sequence_escape_parser(escape_info):
 
 # parse sequence lines
 def sequence_line_parser(line):
-    line = line.rstrip(' ' + seq_item_delimiter + seq_subitem_delimiter + newline)
-    line = line.lstrip(' ' + seq_subitem_delimiter + newline)
     # skip empty lines
     if not line: return None
     # do sequence line parsing
-    seq_items = [x.strip() for x in line.split(seq_item_delimiter) if x.strip()]
+    #seq_items = [x.strip() for x in line.split(seq_item_delimiter) if x.strip()]
+    seq_items = utils.sequence_item_split(line, seq_item_delimiter)
     seq_item_count = len(seq_items)
-    seq_cmd_args = [x for x in seq_items[0].split(' ') if x]
-    cmd_keyword = seq_cmd_args[0]
+    if not seq_item_count: return None
+    #seq_cmd_args = [x for x in seq_items[0].split(' ') if x]
+    seq_cmd_args = utils.sequence_item_split(seq_items[0], ' ')
+    cmd_keyword = seq_cmd_args[0] if seq_cmd_args else 'SEND-ENTER'
     # initialize sequence command instance
     seq_cmd_inst = BuiltinCommand()
     seq_cmd_inst['command'] = ' '.join(seq_cmd_args)
@@ -69,8 +80,8 @@ def sequence_line_parser(line):
         if seq_cmd_inst['action'] != 'ENTER':
             # parse 'NEW WORKER' arguments
             if seq_cmd_inst['action'] == 'NEW_WORKER':
-                if seq_item_count > 1:
-                    raise SequenceError('Invalid syntax for builtin command %s: %s' %(cmd_keyword, line))
+                sequence_check_builtin_syntax(cmd_keyword, line, 1, seq_item_count)
+                sequence_check_builtin_syntax(cmd_keyword, line, 3, len(seq_cmd_args))
                 seq_cmd_inst['loops'] = int(seq_cmd_args[2]) if len(seq_cmd_args) > 2 else 1
                 prefix = sequence_file_entry[:sequence_file_entry.rfind(os.sep)+1]
                 path = seq_cmd_args[1]
@@ -78,14 +89,12 @@ def sequence_line_parser(line):
                 seq_cmd_inst['wait'] = True if 'WAIT' in cmd_keyword else False
             # parse 'FIND' arguments
             elif seq_cmd_inst['action'] == 'FIND':
-                if seq_item_count > 1:
-                    raise SequenceError('Invalid syntax for builtin command %s: %s' %(cmd_keyword, line))
+                sequence_check_builtin_syntax(cmd_keyword, line, 1, seq_item_count)
                 seq_cmd_inst['target_file'] = seq_cmd_args[1]
-                seq_cmd_inst['find_dir'] = [x.strip(' ') for x in ''.join(seq_cmd_args[2:]).split(seq_subitem_delimiter)]
+                seq_cmd_inst['find_dir'] = [x.strip(' ') for x in utils.sequence_item_split(''.join(seq_cmd_args[2:]), seq_subitem_delimiter)]
             # parse 'MONITOR' arguments
             elif seq_cmd_inst['action'] == 'MONITOR':
-                if seq_item_count > 3:
-                    raise SequenceError('Invalid syntax for builtin command %s: %s' %(cmd_keyword, line))
+                sequence_check_builtin_syntax(cmd_keyword, line, 3, seq_item_count)
                 try:
                     seq_cmd_inst['interval'] = float(seq_items[-1].strip())
                 except ValueError:
@@ -95,9 +104,10 @@ def sequence_line_parser(line):
                 seq_cmd_inst['watch'] = watch if watch else []
 
     # check line item count
-    if seq_item_count > 4:
-        raise SequenceError('Invalid syntax for %s command: %s' \
-                            %("BUILTIN" if seq_cmd_inst.builtin else "SENDING", line))
+    if seq_cmd_inst.builtin:
+        sequence_check_builtin_syntax(seq_cmd_inst.command, line, 4, seq_item_count)
+    else:
+        sequence_check_normal_syntax(seq_cmd_inst.command, line, 4, seq_item_count)
 
     # PARSE CONNECTION COMMANDS
     if cmd_keyword in connect_commands:
@@ -115,7 +125,7 @@ def sequence_line_parser(line):
         login_info = g(seq_items, 1)
         expect_info = g(seq_items, 2)
         escape_info = g(seq_items, 3)
-        login_items = [x.strip() for x in login_info.split(seq_subitem_delimiter) if x.strip()] if login_info else []
+        login_items = utils.sequence_item_split(login_info, seq_subitem_delimiter) if login_info else []
         info1 = g(login_items, 0)
         info2 = g(login_items, 1)
         seq_cmd_inst['boot_expect'] = sequence_expect_parser(expect_info)
@@ -124,7 +134,7 @@ def sequence_line_parser(line):
         if seq_cmd_inst['user']:
             seq_cmd_inst['password'] = info2 if info2 else info1
         else:
-            seq_cmd_inst['user'] = info1
+            seq_cmd_inst['user'] = info1.strip() if info1 else info1
             seq_cmd_inst['password'] = info2
 
         if cmd_keyword == 'ssh' and '@' not in seq_cmd_args[1] and seq_cmd_inst['user']:
@@ -173,11 +183,16 @@ def sequence_reader(sequence_file):
         for line in fp:
             line = utils._str(line)
             # skip sequence comments
-            line = line[0:line.find(seq_comment_header)] if seq_comment_header in line else line
-            line = line.strip()
+            seq_comment_header_pos = line.find(seq_comment_header)
+            if seq_comment_header_pos >= 0:
+                line = line[0 : seq_comment_header_pos]
+            # strip ' \n' in right side for all lines, put ';' to the end of line for expect_info
+            line = line.rstrip()
+
             if not line: continue
+
             if line[-1] == seq_continue_nextline:
-                preserved_line = preserved_line + line[0:-1].strip()
+                preserved_line = preserved_line + line[0:-1]
             else:
                 if preserved_line:
                     line = preserved_line + line

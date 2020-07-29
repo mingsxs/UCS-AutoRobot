@@ -624,6 +624,7 @@ class PtyProcess(object):
             time.sleep(readafterdelay)
     
         s = b''
+        if self.fd < 0: raise EOFError('Invalid file descriptor, %d' %(self.fd))
         try:
             while select.select([self.fd,], [], [], 0.0)[0]:
                 s = s + self.read(size=size)
@@ -640,6 +641,7 @@ class PtyProcess(object):
         """Nonblocking read from pseudoterminal, return b'' if child's fd
         is not ready."""
         s = b''
+        if self.fd < 0: raise EOFError('Invalid file descriptor, %d' %(self.fd))
         try:
             if select.select([self.fd,], [], [], 0.0)[0]:
                 s = self.read(size=size)
