@@ -55,10 +55,42 @@ class SequenceWorker(object):
             self.test_sequence = sequence_reader(sequence_file)
         except Exception as err:
             self.stop_display_refresh()
-            self.log_error(err)
+            self.error_logging(err)
             raise err
     
-    def log_error(self, errorinfo):
+    def send_ipc_msg(self, message):
+        if debug_mode_on: return
+
+        if not isinstance(message, str): message = json.dumps(message, ensure_ascii=True)
+
+        tosend = utils._bytes(message)
+        if not tosend: return
+
+        t_end_ipc = time.time() + sock_retry_timeout
+        ipc_msg_sent = False
+        while time.time() <= t_end_ipc and not ipc_msg_sent:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                sock.setblocking(False)
+                sock.connect(UNIX_DOMAIN_SOCKET)
+                sock.sendall(tosend)
+                ipc_msg_sent = True
+            except OSError as err:
+                # socket connected failed or resource not available
+                if err.errno not in (errno.EAGAIN, errno.EWOULDBLOCK,
+                                     errno.ECONNREFUSED, errno.ECONNABORTED,
+                                     errno.EBADF, errno.ENOTCONN, errno.EPIPE):
+                    break
+            finally:
+                sock.close()
+
+        if not ipc_msg_sent:
+            self.stop_display_refresh()
+            error = RuntimeError("Worker message can't be sent: %r" %(tosend))
+            self.error_logging(error)
+            raise error
+    
+    def error_logging(self, errorinfo):
         if not self.errordumpfile:
             error_header = '******ERROR DUMP MESSAGE******' + newline + newline
             error_title = 'TEST SEQUENCE: %s' %(self.sequence_file) + newline + newline
@@ -106,12 +138,12 @@ class SequenceWorker(object):
             # Handling Unknown errors
             else:
                 self.errordump = err
-                self.log_error(newline + 'UNKNOWN ERROR INFO:' + newline)
-                #self.log_error(traceback.format_exc())
-                #self.log_error(sys.exc_info()[2])
-                self.log_error(err_msg + newline)
+                self.error_logging(newline + 'UNKNOWN ERROR INFO:' + newline)
+                #self.error_logging(traceback.format_exc())
+                #self.error_logging(sys.exc_info()[2])
+                self.error_logging(err_msg + newline)
                 agent_info = 'AGENT INFO:' + newline + repr(self.agent)
-                self.log_error(agent_info + newline)
+                self.error_logging(agent_info + newline)
                 result = Messages.ITEM_RESULT_UNKNOWN
             # Need to stop and raise process error
             if err_to_raise:
@@ -143,7 +175,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.send_control('c')
                         except Exception as err:
-                            self.log_error(self.format_error_message('INTR', err) + newline + newline)
+                            self.error_logging(self.format_error_message('INTR', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
                         self.agent.flush()
@@ -152,7 +184,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.quit()
                         except Exception as err:
-                            self.log_error(self.format_error_message('QUIT', err) + newline + newline)
+                            self.error_logging(self.format_error_message('QUIT', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
                         self.agent.flush()
@@ -164,7 +196,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.pty_pulse_session()
                         except Exception as err:
-                            self.log_error(self.format_error_message('PULSE', err) + newline + newline)
+                            self.error_logging(self.format_error_message('PULSE', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
 
@@ -176,7 +208,7 @@ class SequenceWorker(object):
                         try:
                             self.agent.set_pty_prompt(command.argv[1])
                         except Exception as err:
-                            self.log_error(self.format_error_message('SET PROMPT', err) + newline + newline)
+                            self.error_logging(self.format_error_message('SET PROMPT', err) + newline + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(err)]
 
@@ -199,7 +231,7 @@ class SequenceWorker(object):
                                 break
                         if not target_found:
                             ferr = FileError('File not found: %s' %(command.target_file), outputs=outputs)
-                            self.log_error(repr(ferr) + newline)
+                            self.error_logging(repr(ferr) + newline)
                             loop_result = Messages.LOOP_RESULT_UNKNOWN
                             loop_failure_messages = [repr(ferr), ]
                             if self.errordump: loop_failure_messages.append(repr(self.errordump))
@@ -242,9 +274,9 @@ class SequenceWorker(object):
                     # DO LOOP RECOVERY
                     if test_recover_retry == 0:
                         err = RecoveryError('Recovery failed after %d retry at loop %d' %(session_recover_retry, self.complt_loops+1))
-                        self.log_error(newline + '****************ERROR DUMP END****************' + newline)
+                        self.error_logging(newline + '****************ERROR DUMP END****************' + newline)
                         err_msg = newline + repr(err) + newline
-                        self.log_error(err_msg + newline)
+                        self.error_logging(err_msg + newline)
                         self.stop()
                         time.sleep(5)
                         return
@@ -280,6 +312,10 @@ class SequenceWorker(object):
             self.agent.close_pty()
             self.complt_loops += 1
     
+    def stop_display_refresh(self):
+        if self.display_control is not None:
+            self.display_control.value = 0
+    
     def stop(self):
         # send COMPLETED message
         ipc_message = {'MSG': Messages.SEQUENCE_RUNNING_COMPLETE.value,
@@ -289,7 +325,7 @@ class SequenceWorker(object):
         if self.errordump:
             error_info = newline + 'DUMP ERROR INFO:' + newline + repr(self.errordump) + newline
             pty_info = 'AGENT INFO:' + newline + repr(self.agent) + newline
-            self.log_error(error_info + newline + pty_info + newline)
+            self.error_logging(error_info + newline + pty_info + newline)
             self.errordump = None
 
         if self.agent:
@@ -305,42 +341,6 @@ class SequenceWorker(object):
             self.errordumpfile.flush()
             self.errordumpfile.close()
             self.errordumpfile = None
-    
-    def send_ipc_msg(self, message):
-        if debug_mode_on: return
-
-        if not isinstance(message, str): message = json.dumps(message, ensure_ascii=True)
-
-        tosend = utils._bytes(message)
-        if not tosend: return
-
-        t_end_ipc = time.time() + sock_retry_timeout
-        ipc_msg_sent = False
-        while time.time() <= t_end_ipc and not ipc_msg_sent:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            try:
-                sock.setblocking(False)
-                sock.connect(UNIX_DOMAIN_SOCKET)
-                sock.sendall(tosend)
-                ipc_msg_sent = True
-            except OSError as err:
-                # socket connected failed or resource not available
-                if err.errno not in (errno.EAGAIN, errno.EWOULDBLOCK,
-                                     errno.ECONNREFUSED, errno.ECONNABORTED,
-                                     errno.EBADF, errno.ENOTCONN, errno.EPIPE):
-                    break
-            finally:
-                sock.close()
-
-        if not ipc_msg_sent:
-            self.stop_display_refresh()
-            error = RuntimeError("Worker message can't be sent: %r" %(tosend))
-            self.log_error(error)
-            raise error
-    
-    def stop_display_refresh(self):
-        if self.display_control is not None:
-            self.display_control.value = 0
 
 
 class Messages(Enum):
@@ -382,7 +382,7 @@ def run_sequence_worker(global_display_control, sequence_file, loops):
 
 
 # MASTER WORKER
-class MasterWorker(object):
+class Master(object):
     """Master process class, for tracking statuses for all under-going test sequences."""
     def __init__(self, init_sequence_file):
         self.init_sequence_file = init_sequence_file
@@ -434,7 +434,7 @@ class MasterWorker(object):
 
         return message
     
-    def log_failure(self, data):
+    def failure_logging(self, data):
         if not self.failure_logfile:
             log_header = '********FAILURE LOG********' + newline + newline
             self.failure_logfile = open(utils.new_log_path(sequence=self.init_sequence_file.split(os.sep)[-1], suffix='failure'), mode='w')
@@ -460,14 +460,14 @@ class MasterWorker(object):
                     error_log = newline + 'ERROR LOOP: %d' %(msg['LOOP']) + newline + 'ERROR MESSAGES:' + newline
                     for elog in msg['MSG_Q']:
                         error_log = error_log + elog + newline
-                    self.log_failure(error_log)
+                    self.failure_logging(error_log)
                 elif message == Messages.LOOP_RESULT_FAIL.value:
                     worker['FAILURE_LOOPS'] += 1
                     worker['FAILURE_MESSAGES'].update({msg['LOOP']: msg['MSG_Q']})
                     failure_loop_log = newline + 'FAILURE LOOP: %d' %(msg['LOOP']) + newline + 'FAILURE MESSAGES:' + newline + newline
                     for flog in msg['MSG_Q']:
                         failure_loop_log = failure_loop_log + flog + newline
-                    self.log_failure(failure_loop_log)
+                    self.failure_logging(failure_loop_log)
                 else:
                     worker['SUCCESS_LOOPS'] += 1
 
@@ -490,6 +490,7 @@ class MasterWorker(object):
 
         return True
     
+    @property
     def some_worker_running(self):
         return any(w['STATUS'] == 'RUNNING' for w in self.worker_list)
 
@@ -500,7 +501,7 @@ def start_master(entry_sequence_file, entry_running_loops=1):
     UNIX_DOMAIN_SOCKET = utils.new_uds_name(entry_sequence_file)
     # A shared memory variable, a window display controller which can be set by all workers.
     global_display_control = Value('b', 1)
-    master = MasterWorker(init_sequence_file=entry_sequence_file)
+    master = Master(init_sequence_file=entry_sequence_file)
     # start first sequence worker
     worker = Process(target=run_sequence_worker, args=(global_display_control,
                                                        entry_sequence_file,
@@ -522,7 +523,7 @@ def start_master(entry_sequence_file, entry_running_loops=1):
         window_display = window_header + 'TIME CONSUME: %s' %(time_consume) + newline + newline
         cursor_lines = 5
         # quit everything if all test workers finish
-        if not master.some_worker_running():
+        if not master.some_worker_running:
             # handle all messages in buffer
             while master.update_worker_status(master.recv_ipc_msg()):
                 pass

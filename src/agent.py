@@ -144,7 +144,7 @@ class UCSAgentWrapper(object):
         self.close_pty()
         return True
     
-    def _s_verify_term(self, s):
+    def _s_verify_termchar(self, s):
         return any(in_search(p, s[-prompt_offset_range:]) for p in PROMPT_WAIT_INPUT)
     
     def _s_verify_user(self, s, user, serial_mode):
@@ -156,7 +156,7 @@ class UCSAgentWrapper(object):
         if not user: user = self.user
         if not serial_connect: serial_connect = self.cisco_sol_mode or self.serial_port_mode
         if prompt and '\n' not in prompt and not utils.ucs_dupsubstr_verify(prompt):
-            return self._s_verify_term(prompt) and self._s_verify_user(prompt, user, serial_connect)
+            return self._s_verify_termchar(prompt) and self._s_verify_user(prompt, user, serial_connect)
         return False
     
     def log(self, data=''):
@@ -285,7 +285,7 @@ class UCSAgentWrapper(object):
                                 self._send_all('\r\n')
                                 boot_stream = self.read_until(PROMPT_WAIT_INPUT, bootup_watch_period, ignore_error=True)
                                 if do_boot_check: out = out + boot_stream
-                                if boot_stream and boot_stream.count('\n') in (1, 2) and self._s_verify_term(boot_stream):
+                                if boot_stream and boot_stream.count('\n') in (1, 2) and self._s_verify_termchar(boot_stream):
                                     session_connected = True
                                     break
 
@@ -307,7 +307,7 @@ class UCSAgentWrapper(object):
                 self.flush()
                 self._send_all('\r\n')
                 s = self.read_until(PROMPT_WAIT_INPUT, session_prompt_retry_timeout, ignore_error=True)
-                if s and s.count('\n') in (1,2) and self._s_verify_term(s):
+                if s and s.count('\n') in (1,2) and self._s_verify_termchar(s):
                     if s.count('\n') == 2: self.pty_linesep = '\n'
                     else: self.pty_linesep = '\r\n'
                     self.flush(delaybeforeflush=0.1)
