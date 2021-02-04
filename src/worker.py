@@ -28,6 +28,7 @@ from utils import (ExpectError,
                    TimeoutError,
                    FileError,
                    RecoveryError)
+import sequence
 from sequence import sequence_reader
 from builtin import BuiltinCommand
 import cursor
@@ -261,6 +262,29 @@ class SequenceWorker(object):
                                     break
                             if cont: time.sleep(command.interval if command.interval > 0 else 0)
 
+                    elif command.action == 'LOOP':
+                        start = sequence.SUBSEQUENCES[command.subsequence_name]['start']
+                        end = sequence.SUBSEQUENCES[command.subsequence_name]['end']
+                        test_loops_save = self.test_loops
+                        complt_loops_save = self.complt_loops
+                        test_sequence_save = self.test_sequence
+                        sequence_file_save = self.sequence_file
+                        self.sequence_file = command.subsequence_name
+                        self.test_loops = command.loops
+                        self.test_sequence = self.test_sequence[start:end]
+                        ipc_message = {'MSG': Messages.SEQUENCE_RUNNING_START.value,
+                                       'NAME': self.sequence_file.split('.')[0],
+                                       'LOOPS': command.loops}
+                        self.send_ipc_msg(ipc_message)
+                        self.run_all()
+                        ipc_message = {'MSG': Messages.SEQUENCE_RUNNING_COMPLETE.value,
+                                       'NAME': self.sequence_file.split('.')[0]}
+                        self.send_ipc_msg(ipc_message)
+                        self.test_loops = test_loops_save
+                        self.test_sequence = test_sequence_save
+                        self.complt_loops = complt_loops_save
+                        self.sequence_file = sequence_file_save
+
                 else:
                     result, message, output = self.run_sequence_command(command)
                     if result == Messages.ITEM_RESULT_UNKNOWN:
@@ -309,7 +333,7 @@ class SequenceWorker(object):
                            'MSG_Q': loop_failure_messages}
             self.send_ipc_msg(ipc_message)
             # move on to next loop
-            self.agent.close_pty()
+            #self.agent.close_pty()
             self.complt_loops += 1
     
     def stop_display_refresh(self):

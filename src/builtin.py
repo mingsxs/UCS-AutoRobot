@@ -17,6 +17,9 @@ COMMAND_ACTION_MAPPING = {
     r"^SEND.ENTER$": 'ENTER',
     r"^FIND$": 'FIND',
     r"^MONITOR$": 'MONITOR',
+    r"^SUBSEQUENCE$": 'SUBSEQUENCE',
+    r"^END.SUBSEQUENCE$": 'SUBSEQUENCE',
+    r"^LOOP$": 'LOOP',
 }
 
 

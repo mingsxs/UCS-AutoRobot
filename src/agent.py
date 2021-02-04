@@ -68,6 +68,11 @@ intershell_info = {
                  'exit_cmd': 'exit',
                  'init_wait': 3.0,
                  'terminator': r"> {0,3}$"},
+
+    'i2c_uart': {'img_regex': r"i2c_uart.*",
+                 'exit_cmd': 'ctrl+p+d',
+                 'init_wait': 0.0,
+                 'terminator': r"# {0,3}$"},
     }
 
 class LoginCases(Enum):
@@ -368,7 +373,7 @@ class UCSAgentWrapper(object):
     
     def _trigger_intershell(self, cmd):
         was_intershell = self.intershell
-        if self.session_info_chain and len(cmd.split(' ')) == 1:
+        if self.session_info_chain:
             exe = cmd.split(os.sep)[-1]
             for k, v in intershell_info.items():
                 if re.search(v['img_regex'], cmd):
@@ -453,10 +458,14 @@ class UCSAgentWrapper(object):
     
     def send_control(self, char):
         out = None
-        out = self.pty.sendcontrol(char)
-        if char.lower() == 'c':
-            #self._send_line()
-            self.read_until(self.prompt, send_intr_timeout, ignore_error=True)
+        if len(char) > 1:
+            out = self.pty.sendcontrol(char[0])
+            self._send_all(char[1:])
+        else:
+            out = self.pty.sendcontrol(char)
+            if char.lower() == 'c':
+                #self._send_line()
+                self.read_until(self.prompt, send_intr_timeout, ignore_error=True)
         return out
     
     def flush(self, delaybeforeflush=0.0, close_handler=False):
@@ -643,7 +652,7 @@ class UCSAgentWrapper(object):
             # Handling commands which reset pty shell prompt
             prompt_set_filter = [utils.get_command_word(cmd) == 'cd',
                                  self._trigger_intershell(cmd),
-                                 seqcmdargs.get('action') == 'FIND', ]
+                                 seqcmdargs.get('action') == 'FIND',]
             if any(prompt_set_filter):
                 return self.set_pty_prompt(intershell=prompt_set_filter[1])
             # Handling case of running background commands
@@ -794,7 +803,12 @@ class UCSAgentWrapper(object):
             self.close_pty()
 
         elif self.intershell:
-            self._ensure_send_line(intershell_info[self.current_session]['exit_cmd'])
+            exit_cmd = intershell_info[self.current_session]['exit_cmd']
+            if 'ctrl' in exit_cmd.lower():
+                ctrlchars = ''.join([c for c in exit_cmd.lower().lstrip('ctrl ') if c.isalpha()])
+                self.send_control(ctrlchars)
+            else:
+                self._ensure_send_line(exit_cmd)
             self.current_session = self.session_info_chain[-1]['session']
             self.prompt = self.session_info_chain[-1]['prompt']
             self.command_timeout = self.session_info_chain[-1]['command_timeout']

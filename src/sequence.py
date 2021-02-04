@@ -17,6 +17,9 @@ import utils
 from utils import SequenceError
 
 
+SUBSEQUENCES = {}
+
+
 def sequence_check_builtin_syntax(word, line, limit, count):
     if count > limit:
         raise SequenceError('Invalid syntax for BUILTIN command %s: %s' %(word, line))
@@ -102,6 +105,17 @@ def sequence_line_parser(line):
                 seq_cmd_inst['command'] = ' '.join(seq_cmd_args[1:])
                 watch = sequence_escape_parser(g(seq_items, 1))
                 seq_cmd_inst['watch'] = watch if watch else []
+            # parse 'SUBSEQUENCE' arguments
+            elif seq_cmd_inst['action'] == 'SUBSEQUENCE':
+                if len(seq_cmd_args) > 1:
+                    seq_cmd_inst.subsequence_name = seq_cmd_args[1]
+                    if seq_cmd_inst.subsequence_name not in SUBSEQUENCES:
+                        SUBSEQUENCES[seq_cmd_inst.subsequence_name] = {}
+                return seq_cmd_inst
+            # parse 'LOOP' arguments
+            elif seq_cmd_inst['action'] == 'LOOP':
+                seq_cmd_inst['subsequence_name'] = seq_cmd_args[1]
+                seq_cmd_inst['loops'] = int(seq_cmd_args[2]) if len(seq_cmd_args) > 2 else 1
 
     # check line item count
     if seq_cmd_inst.builtin:
@@ -198,7 +212,15 @@ def sequence_reader(sequence_file):
                     line = preserved_line + line
                     preserved_line = ''
                 inst = sequence_line_parser(line)
-                if inst: test_seq.append(inst)
+
+                if inst:
+                    if inst.action == 'SUBSEQUENCE' and inst.subsequence_name in SUBSEQUENCES:
+                        if 'start' in SUBSEQUENCES[inst.subsequence_name]:
+                            SUBSEQUENCES[inst.subsequence_name]['end'] = len(test_seq)
+                        else:
+                            SUBSEQUENCES[inst.subsequence_name]['start'] = len(test_seq)
+                    else:
+                        test_seq.append(inst)
 
     sequence_finalize(test_seq)
 
